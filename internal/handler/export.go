@@ -17,22 +17,26 @@ func NewExportHandler(resumeStore *store.ResumeStore, ncStore *store.NextcloudSt
 func (h *ExportHandler) Download(c fiber.Ctx) error {
 	resumeID := c.Params("id")
 
-	// 1. Try in-memory cache by resume ID (no MongoDB read needed, works instantly)
-	if pdfBytes, ok := store.GetPDFByResumeID(resumeID); ok {
-		c.Set("Content-Type", "application/pdf")
-		c.Set("Content-Disposition", "inline; filename=\"resume.pdf\"")
-		return c.Send(pdfBytes)
+	// Try in-memory cache by resume ID
+	if data, ok := store.GetAnyCacheByResumeID(resumeID); ok {
+		contentType := "text/html"
+		if len(data) > 10 && string(data[:5]) == "%PDF-" {
+			contentType = "application/pdf"
+		}
+		c.Set("Content-Type", contentType)
+		c.Set("Content-Disposition", "inline; filename=\"resume.html\"")
+		return c.Send(data)
 	}
 
-	// 2. Fallback: query MongoDB then cache
+	// Fallback: try MongoDB
 	resume, err := h.resumeStore.FindByResumeIDString(resumeID)
 	if err == nil && resume != nil && resume.CurrentPDFPath != "" {
-		if pdfBytes, ok := store.GetPDF(resume.CurrentPDFPath); ok {
-			c.Set("Content-Type", "application/pdf")
-			c.Set("Content-Disposition", "inline; filename=\"resume.pdf\"")
-			return c.Send(pdfBytes)
+		if data, ok := store.GetHTML(resume.CurrentPDFPath); ok {
+			c.Set("Content-Type", "text/html")
+			c.Set("Content-Disposition", "inline; filename=\"resume.html\"")
+			return c.Send(data)
 		}
 	}
 
-	return fiber.NewError(fiber.StatusNotFound, "pdf not yet generated")
+	return fiber.NewError(fiber.StatusNotFound, "resume not yet generated")
 }

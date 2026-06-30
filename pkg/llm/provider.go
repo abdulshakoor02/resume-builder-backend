@@ -2,6 +2,10 @@ package llm
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
 
 	agent "github.com/pontus-devoteam/agent-sdk-go/pkg/agent"
 	"github.com/pontus-devoteam/agent-sdk-go/pkg/model"
@@ -25,6 +29,16 @@ func NewProviderFactory(apiKey, modelName, baseURL string) (*ProviderFactory, er
 	if baseURL != "" {
 		p.SetBaseURL(baseURL)
 	}
+
+	// Override default 120s timeout with a configurable value.
+	// Refinement calls with large structured data can take longer.
+	timeout := 300 * time.Second
+	if v := os.Getenv("LLM_HTTP_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeout = time.Duration(n) * time.Second
+		}
+	}
+	p.WithHTTPClient(&http.Client{Timeout: timeout})
 
 	return &ProviderFactory{
 		apiKey:   apiKey,

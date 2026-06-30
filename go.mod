@@ -9,8 +9,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/jung-kurt/gofpdf v1.16.2
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/pontus-devoteam/agent-sdk-go v0.0.9
-	github.com/razvandimescu/gopdf v0.9.3
 	github.com/studio-b12/gowebdav v0.12.0
 	go.mongodb.org/mongo-driver v1.17.9
 	golang.org/x/crypto v0.53.0

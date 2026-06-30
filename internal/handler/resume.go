@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"time"
@@ -78,6 +79,13 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		title = title[:100]
 	}
 
+	resume := &model.Resume{
+		ID:     primitive.NewObjectID(),
+		UserID: userID,
+		Title:  title,
+		Status: model.StatusGenerating,
+	}
+
 	var extractedText string
 
 	if hasFiles {
@@ -119,12 +127,14 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 				} else {
 					upload.ExtractedText = text
 				}
-			case ".pdf":
+		case ".pdf":
+				// Try PDF text-layer parser first (works well for text-based PDFs).
 				text, err := parser.ExtractPDFText(fileBytes)
 				if err != nil {
-					log.Printf("pdf extraction failed for %s: %v", fileHeader.Filename, err)
+					log.Printf("pdf text extraction failed for %s: %v", fileHeader.Filename, err)
 				} else {
 					upload.ExtractedText = text
+					log.Printf("pdf text parser produced %d chars for %s", len(text), fileHeader.Filename)
 				}
 			}
 
@@ -134,19 +144,26 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			}
 
 			if upload.ExtractedText != "" {
+				log.Printf("extracted text from %s: %d chars, preview: %.200s", fileHeader.Filename, len(upload.ExtractedText), upload.ExtractedText)
 				if extractedText != "" {
 					extractedText += "\n\n---\n\n"
 				}
 				extractedText += upload.ExtractedText
+			} else {
+				log.Printf("no text layer in %s, trying vision-based extraction...", fileHeader.Filename)
+				visionText, visionErr := parser.ExtractPDFTextWithVision(fileBytes)
+				if visionErr != nil {
+					log.Printf("vision extraction also failed for %s: %v", fileHeader.Filename, visionErr)
+				} else if visionText != "" {
+					log.Printf("vision extraction succeeded for %s: %d chars", fileHeader.Filename, len(visionText))
+					upload.ExtractedText = visionText
+					if extractedText != "" {
+						extractedText += "\n\n---\n\n"
+					}
+					extractedText += visionText
+				}
 			}
 		}
-	}
-
-	resume := &model.Resume{
-		ID:     primitive.NewObjectID(),
-		UserID: userID,
-		Title:  title,
-		Status: model.StatusGenerating,
 	}
 
 	if err := h.resumeStore.Create(context.Background(), resume); err != nil {
@@ -185,11 +202,11 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			return
 		}
 
-		log.Printf("agent completed for resume %s, pdf_path=%s", resumeID, result.PDFPath)
+		log.Printf("agent completed for resume %s, html_path=%s", resumeID, result.HTMLPath)
 
 		revision := model.Revision{
 			Prompt:       prompt,
-			PDFPath:      result.PDFPath,
+			PDFPath:      result.HTMLPath,
 			AgentContext: result.ResumeData,
 			CreatedAt:    time.Now(),
 		}
@@ -200,7 +217,7 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			"structured_data": result.ResumeData,
 		})
 		// Broadcast AFTER MongoDB writes are done, so the frontend sees updated data
-		NotifyStatusChanged(resumeID, "completed", "Resume PDF is ready", result.PDFPath)
+		NotifyStatusChanged(resumeID, "completed", "Resume design is ready", result.HTMLPath)
 	}()
 
 	return c.Status(fiber.StatusCreated).JSON(model.CreateResumeResponse{
@@ -264,6 +281,15 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		})
 	}
 
+	// Include existing structured data so the agent has full context of what it's modifying
+	if resume.StructuredData != nil {
+		if dataBytes, err := json.Marshal(resume.StructuredData); err == nil {
+			history = append(history, map[string]string{
+				"context": string(dataBytes),
+			})
+		}
+	}
+
 	h.resumeStore.SetStatus(context.Background(), resumeID, model.StatusGenerating)
 
 	go func() {
@@ -286,7 +312,7 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 
 		revision := model.Revision{
 			Prompt:       req.Prompt,
-			PDFPath:      result.PDFPath,
+			PDFPath:      result.HTMLPath,
 			AgentContext: result.ResumeData,
 			CreatedAt:    time.Now(),
 		}
@@ -296,7 +322,7 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 			"status":          model.StatusCompleted,
 			"structured_data": result.ResumeData,
 		})
-		NotifyStatusChanged(resumeIDStr, "completed", "Resume PDF updated", result.PDFPath)
+		NotifyStatusChanged(resumeIDStr, "completed", "Resume design updated", result.HTMLPath)
 	}()
 
 	return c.JSON(model.RefineResumeResponse{})

@@ -212,10 +212,16 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		}
 
 		h.resumeStore.PushRevision(ctx, resume.ID, revision)
-		h.resumeStore.Update(ctx, resume.ID, bson.M{
+
+		updateFields := bson.M{
 			"status":          model.StatusCompleted,
 			"structured_data": result.ResumeData,
-		})
+		}
+		// Persist the generated HTML so it survives restarts and is always retrievable
+		if htmlData, ok := store.GetHTML(resumeID); ok {
+			updateFields["html_content"] = string(htmlData)
+		}
+		h.resumeStore.Update(ctx, resume.ID, updateFields)
 		// Broadcast AFTER MongoDB writes are done, so the frontend sees updated data
 		NotifyStatusChanged(resumeID, "completed", "Resume design is ready", result.HTMLPath)
 	}()
@@ -318,10 +324,15 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		}
 
 		h.resumeStore.PushRevision(ctx, resumeID, revision)
-		h.resumeStore.Update(ctx, resumeID, bson.M{
+
+		updateFields := bson.M{
 			"status":          model.StatusCompleted,
 			"structured_data": result.ResumeData,
-		})
+		}
+		if htmlData, ok := store.GetHTML(resumeIDStr); ok {
+			updateFields["html_content"] = string(htmlData)
+		}
+		h.resumeStore.Update(ctx, resumeID, updateFields)
 		NotifyStatusChanged(resumeIDStr, "completed", "Resume design updated", result.HTMLPath)
 	}()
 

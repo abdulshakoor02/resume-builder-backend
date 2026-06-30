@@ -22,6 +22,7 @@ type Resume struct {
 	Status         ResumeStatus       `bson:"status" json:"status"`
 	CurrentPDFPath string             `bson:"current_pdf_path" json:"current_pdf_path"`
 	CurrentPDFURL  string             `bson:"current_pdf_url" json:"current_pdf_url"`
+	HTMLContent    string             `bson:"html_content,omitempty" json:"html_content,omitempty"`
 	StructuredData interface{}        `bson:"structured_data,omitempty" json:"structured_data,omitempty"`
 	Revisions      []Revision         `bson:"revisions,omitempty" json:"revisions,omitempty"`
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`

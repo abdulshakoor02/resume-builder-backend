@@ -180,7 +180,9 @@ func (tc *ToolContext) generateHTMLTool() tool.Tool {
 			store.PutHTML(key, []byte(html))
 
 			if tc.NCStore != nil {
-				_ = tc.NCStore.UploadFile(key, []byte(html))
+				if err := tc.NCStore.UploadFile(key, []byte(html)); err != nil {
+					log.Printf("generate_html: nextcloud upload failed for %s: %v", key, err)
+				}
 			}
 
 			// Also cache the HTML directly by resume ID for immediate retrieval

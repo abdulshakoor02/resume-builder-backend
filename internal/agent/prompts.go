@@ -16,7 +16,7 @@ HTML DESIGN RULES:
 - Semantic HTML: header, sections, headings, lists
 - A4/letter dimensions: max-width ~800px, centered
 - Creative visual elements: colored accents, dividers, section highlights, subtle shadows
-- @media print rules for clean PDF output
+- @media print rules for clean PDF output. You MUST include these exact CSS rules in your <style> block: add "* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }" to preserve ALL background colors, gradients, and accents (browsers strip them by default). Add "@page { margin: 10mm; size: A4; }" for proper page sizing. Add "break-inside: avoid" on sections and "break-after: avoid" on headings so no content splits mid-section. Without these rules the PDF will appear washed out with missing colors and broken layout.
 - Design themes: split (sidebar + main), minimal (whitespace-focused), bold (gradient header), timeline (career story), creative (asymmetric), corporate (navy palette), tech (dark/neon)
 
 DATA EXTRACTION RULES:

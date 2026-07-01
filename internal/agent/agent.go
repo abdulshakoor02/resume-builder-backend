@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/pontus-devoteam/agent-sdk-go/pkg/runner"
 	"github.com/resume-builder/backend/internal/store"
@@ -42,6 +44,7 @@ func (a *ResumeAgent) GenerateResume(
 	extractedText string,
 	prompt string,
 	conversationHistory []map[string]string,
+	photoDataURI string,
 ) (*AgentResult, error) {
 	if a.provider == nil {
 		return nil, fmt.Errorf("LLM provider not configured - set LLM_API_KEY in your .env")
@@ -72,6 +75,14 @@ func (a *ResumeAgent) GenerateResume(
 	if len(conversationHistory) > 0 {
 		input = fmt.Sprintf("REFINE this resume based on: %s\n\n", prompt)
 
+		// Include the current HTML content so the agent has the full existing resume
+		for _, rev := range conversationHistory {
+			if htmlStr, ok := rev["html"]; ok && htmlStr != "" {
+				input += fmt.Sprintf("=== EXISTING RESUME HTML (modify this, keep everything except the requested changes) ===\n%s\n=== END EXISTING HTML ===\n\n", htmlStr)
+				break
+			}
+		}
+
 		// Find and include the existing structured data
 		for _, rev := range conversationHistory {
 			if ctx, ok := rev["context"]; ok && ctx != "" {
@@ -88,11 +99,35 @@ func (a *ResumeAgent) GenerateResume(
 			}
 		}
 
-		input += "\n\nWORKFLOW:\nSTEP 1: Call get_resume_schema()\nSTEP 2: Call get_design_themes() and choose the best theme\nSTEP 3: Using the EXISTING resume data above, apply the refinement and construct the complete structured JSON. Do NOT omit any existing sections, dates, or bullet points — only modify what the user asked to change.\nSTEP 4: Write the complete HTML resume using the structured data and call generate_resume_html(html=YOUR_HTML)\n\nIMPORTANT: Keep ALL existing content from the resume data above. Only change what the user asked to refine."
+		input += "\n\nWORKFLOW:\nSTEP 1: Call get_resume_schema()\nSTEP 2: Call get_design_themes() and choose the best theme\nSTEP 3: Using the EXISTING resume HTML and data above, apply the refinement and create a new HTML document. Modify ONLY what the user requested. Preserve ALL existing content, sections, dates, bullet points, styling, and layout.\nSTEP 4: Call generate_resume_html(html=YOUR_HTML) with the complete updated HTML document.\n\nCRITICAL: You MUST call generate_resume_html() with the full HTML. The existing HTML is provided above — make only the requested changes and call the tool with the complete result."
 	} else if extractedText != "" && len(extractedText) > 50 {
 		input = fmt.Sprintf("=== RESUME DATA (PRESERVE EVERY DETAIL) ===\n\nThe following is the complete extracted text from the uploaded resume file. You MUST preserve every detail — every job, every date, every bullet point, every skill.\n\nUser instructions: %s\n\n=== EXTRACTED TEXT START ===\n%s\n=== EXTRACTED TEXT END ===\n\nWORKFLOW:\nSTEP 1: Call get_resume_schema()\nSTEP 2: Call get_design_themes() and choose the best theme\nSTEP 3: Call extract_resume_data(raw_text=EXTRACTED_TEXT_ABOVE)\nSTEP 4: Output the complete structured JSON with ALL sections and details. Do NOT skip any section, date, or bullet point.\nSTEP 5: Write the complete HTML resume using the structured data and call generate_resume_html(html=YOUR_HTML)\n\nThe HTML must render EVERY section from the source. Do NOT fabricate. Do NOT summarize.\nUse the 1M context window fully — include rich styling, detailed sections, and creative design elements.", prompt, extractedText)
 	} else {
 		input = fmt.Sprintf("Create a beautiful HTML resume based on: %s\n\nCALL get_resume_schema(), get_design_themes(), then write HTML and call generate_resume_html().", prompt)
+	}
+
+	// Inject profile photo context so the agent places it in the HTML header.
+	if photoDataURI != "" {
+		log.Printf("agent: photo provided, data URI length=%d", len(photoDataURI))
+		// Use an absolute URL to the photo endpoint so the image loads correctly
+		// regardless of whether the HTML is viewed via iframe srcDoc or directly.
+		// The HTML is rendered on the frontend (different origin), so relative
+		// paths would resolve to the wrong server.
+		apiBase := os.Getenv("API_BASE_URL")
+		if apiBase == "" {
+			apiBase = "http://localhost:1100"
+		}
+		photoURL := fmt.Sprintf("%s/api/resumes/%s/photo", strings.TrimRight(apiBase, "/"), resumeID)
+		photoBlock := fmt.Sprintf(
+			"=== PROFILE PHOTO ===\n"+
+				"The user provided a profile photo. Place it prominently in the HTML header area.\n"+
+				"Use an <img> tag with src=\"%s\" and alt=\"Profile Photo\".\n"+
+				"Style it with: border-radius: 50%%; object-fit: cover; width: 110px; height: 110px;.\n"+
+				"The photo must appear in the final HTML. Use the exact URL above.\n"+
+				"=== END PHOTO ===\n\n",
+			photoURL,
+		)
+		input = photoBlock + input
 	}
 
 	result, err := a.runner.RunSync(agt, &runner.RunOptions{

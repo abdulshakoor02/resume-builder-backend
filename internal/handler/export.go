@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log"
+	"net/http"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/resume-builder/backend/internal/store"
@@ -55,4 +56,40 @@ func serveResume(c fiber.Ctx, data []byte) error {
 	c.Set("Content-Type", contentType)
 	c.Set("Content-Disposition", "inline; filename=\"resume.html\"")
 	return c.Send(data)
+}
+
+func (h *ExportHandler) Photo(c fiber.Ctx) error {
+	resumeID := c.Params("id")
+
+	// Try in-memory cache first
+	if data, ok := store.GetPhoto(resumeID); ok {
+		contentType := http.DetectContentType(data)
+		c.Set("Content-Type", contentType)
+		c.Set("Cache-Control", "public, max-age=31536000")
+		return c.Send(data)
+	}
+
+	// Try database for photo_path, then Nextcloud
+	resume, err := h.resumeStore.FindByResumeIDString(resumeID)
+	if err == nil && resume != nil {
+		// If photo_path is stored in DB, try to fetch from Nextcloud
+		if resume.PhotoPath != "" && h.ncStore != nil {
+			if data, dErr := h.ncStore.DownloadFile(resume.PhotoPath); dErr == nil {
+				store.PutPhoto(resumeID, data)
+				contentType := http.DetectContentType(data)
+				c.Set("Content-Type", contentType)
+				c.Set("Cache-Control", "public, max-age=31536000")
+				return c.Send(data)
+			}
+		}
+		// Fallback: check if there's any uploaded file cache for this resume
+		if data, ok := store.GetUploadedFile(resumeID); ok {
+			contentType := http.DetectContentType(data)
+			c.Set("Content-Type", contentType)
+			c.Set("Cache-Control", "public, max-age=31536000")
+			return c.Send(data)
+		}
+	}
+
+	return fiber.NewError(fiber.StatusNotFound, "photo not found")
 }

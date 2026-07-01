@@ -43,3 +43,22 @@ func HasUploadedFile(resumeID string) bool {
 	}
 	return false
 }
+
+// ---- Photo cache (in-memory) ----
+
+var photoCache = &fileCache{
+	cache: make(map[string][]byte),
+}
+
+func PutPhoto(key string, data []byte) {
+	photoCache.mu.Lock()
+	defer photoCache.mu.Unlock()
+	photoCache.cache[key] = data
+}
+
+func GetPhoto(key string) ([]byte, bool) {
+	photoCache.mu.RLock()
+	defer photoCache.mu.RUnlock()
+	data, ok := photoCache.cache[key]
+	return data, ok
+}

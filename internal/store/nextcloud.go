@@ -17,19 +17,21 @@ type NextcloudStore struct {
 
 func NewNextcloudStore(baseURL, username, password, shareBaseURL string) *NextcloudStore {
 	// Ensure the base URL includes the WebDAV path prefix.
-	// Without /remote.php/dav/files/, gowebdav targets the wrong endpoint and all
-	// uploads/downloads silently fail. Mongo html_content is the reliable fallback.
 	if baseURL != "" && !strings.Contains(baseURL, "/remote.php/dav/files/") {
 		log := defaultLogger()
-		log.Printf("WARNING: NEXTCLOUD_BASE_URL is missing /remote.php/dav/files/<user> suffix. Appending /remote.php/dav/files/%s. Fix your .env to avoid this warning.", username)
+		log.Printf("WARNING: NEXTCLOUD_BASE_URL is missing /remote.php/dav/files/ prefix. Appending /remote.php/dav/files/%s. Fix your .env to avoid this warning.", username)
 		baseURL = strings.TrimRight(baseURL, "/") + "/remote.php/dav/files/" + username
 	}
 
+	// Split into host root + WebDAV path prefix.
+	// gowebdav.NewClient takes a plain host root; the WebDAV path prefix
+	// goes into basePath so fullPath returns URLs like:
+	//   https://host/remote.php/dav/files/admin/photos/file.jpg
 	parts := strings.SplitN(baseURL, "/remote.php/dav/files/", 2)
-	root := parts[0]
+	root := strings.TrimRight(parts[0], "/")
 	basePath := ""
 	if len(parts) == 2 {
-		basePath = parts[1]
+		basePath = "remote.php/dav/files/" + parts[1]
 	}
 
 	client := gowebdav.NewClient(root, username, password)

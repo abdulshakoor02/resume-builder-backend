@@ -2,9 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -77,6 +82,56 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 	}
 	if len(title) > 100 {
 		title = title[:100]
+	}
+
+	// ---- Profile photo (optional) ----
+	var photoDataURI string
+	var photoPath string
+	var photoBytes []byte
+	if form != nil && form.File != nil {
+		if photoHeaders, ok := form.File["photo"]; ok && len(photoHeaders) > 0 {
+			ph := photoHeaders[0]
+			if ph.Size > 2*1024*1024 {
+				return fiber.NewError(fiber.StatusBadRequest, "photo must be under 2MB")
+			}
+			photoExt := strings.ToLower(filepath.Ext(ph.Filename))
+			if photoExt == "" {
+				photoExt = ".jpg"
+			}
+			mimeType := ph.Header.Get("Content-Type")
+			if mimeType == "" {
+				switch photoExt {
+				case ".jpg", ".jpeg":
+					mimeType = "image/jpeg"
+				case ".png":
+					mimeType = "image/png"
+				case ".webp":
+					mimeType = "image/webp"
+				}
+			}
+			if mimeType != "image/jpeg" && mimeType != "image/png" && mimeType != "image/webp" {
+				return fiber.NewError(fiber.StatusBadRequest, "photo must be JPEG, PNG, or WebP")
+			}
+			pf, err := ph.Open()
+			if err != nil {
+				log.Printf("photo: failed to open: %v", err)
+			} else {
+				pb, err := io.ReadAll(pf)
+				pf.Close()
+				if err != nil {
+					log.Printf("photo: failed to read: %v", err)
+				} else {
+					contentType := http.DetectContentType(pb)
+					if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/webp" {
+						return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("photo appears to be %s, not a valid image", contentType))
+					}
+					log.Printf("photo: received %s, size=%d bytes", ph.Filename, len(pb))
+					photoDataURI = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(pb)
+					photoPath = "photos/" + userIDStr + "/{{RESUME_ID}}" + photoExt // placeholder, replaced after resume creation
+					photoBytes = pb
+				}
+			}
+		}
 	}
 
 	resume := &model.Resume{
@@ -170,6 +225,15 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to create resume")
 	}
 
+	// Finalize photo path now that we have the resume ID, and upload to Nextcloud.
+	if photoBytes != nil {
+		photoPath = strings.Replace(photoPath, "{{RESUME_ID}}", resume.ID.Hex(), 1)
+		if ncErr := h.ncStore.UploadFile(photoPath, photoBytes); ncErr != nil {
+			log.Printf("photo: nextcloud upload failed (non-fatal): %v", ncErr)
+		}
+		store.PutPhoto(resume.ID.Hex(), photoBytes)
+	}
+
 	log.Printf("resume created: id=%s title=%s status=generating prompt_len=%d extracted_text_len=%d", 
 		resume.ID.Hex(), title, len(prompt), len(extractedText))
 
@@ -193,7 +257,8 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			resumeID,
 			extractedText,
 			prompt,
-			nil,
+			nil,            // conversationHistory
+			photoDataURI,   // profile photo (base64 data URI or empty)
 		)
 		if err != nil {
 			log.Printf("agent failed for resume %s: %v", resumeID, err)
@@ -220,6 +285,9 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		// Persist the generated HTML so it survives restarts and is always retrievable
 		if htmlData, ok := store.GetHTML(resumeID); ok {
 			updateFields["html_content"] = string(htmlData)
+		}
+		if photoPath != "" {
+			updateFields["photo_path"] = photoPath
 		}
 		h.resumeStore.Update(ctx, resume.ID, updateFields)
 		// Broadcast AFTER MongoDB writes are done, so the frontend sees updated data
@@ -267,12 +335,77 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid resume id")
 	}
 
+	// Try JSON first, then multipart form (for photo upload)
 	var req model.RefineResumeRequest
-	if err := c.Bind().JSON(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-	if req.Prompt == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "prompt is required")
+	var photoDataURI string
+	var photoBytes []byte
+	var photoPath string
+
+	contentType := c.Get("Content-Type")
+	if strings.Contains(contentType, "multipart/form-data") {
+		form, err := c.MultipartForm()
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid multipart form")
+		}
+		prompt := form.Value["prompt"]
+		if len(prompt) == 0 || prompt[0] == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "prompt is required")
+		}
+		req.Prompt = prompt[0]
+
+		// Handle photo upload
+		if form.File != nil {
+			if photoHeaders, ok := form.File["photo"]; ok && len(photoHeaders) > 0 {
+				ph := photoHeaders[0]
+				if ph.Size > 2*1024*1024 {
+					return fiber.NewError(fiber.StatusBadRequest, "photo must be under 2MB")
+				}
+				photoExt := strings.ToLower(filepath.Ext(ph.Filename))
+				if photoExt == "" {
+					photoExt = ".jpg"
+				}
+				mimeType := ph.Header.Get("Content-Type")
+				if mimeType == "" {
+					switch photoExt {
+					case ".jpg", ".jpeg":
+						mimeType = "image/jpeg"
+					case ".png":
+						mimeType = "image/png"
+					case ".webp":
+						mimeType = "image/webp"
+					}
+				}
+				if mimeType != "image/jpeg" && mimeType != "image/png" && mimeType != "image/webp" {
+					return fiber.NewError(fiber.StatusBadRequest, "photo must be JPEG, PNG, or WebP")
+				}
+				pf, err := ph.Open()
+				if err != nil {
+					log.Printf("photo: failed to open: %v", err)
+				} else {
+					pb, err := io.ReadAll(pf)
+					pf.Close()
+					if err != nil {
+						log.Printf("photo: failed to read: %v", err)
+					} else {
+						ct := http.DetectContentType(pb)
+						if ct != "image/jpeg" && ct != "image/png" && ct != "image/webp" {
+							return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("photo appears to be %s, not a valid image", ct))
+						}
+						log.Printf("photo: received %s, size=%d bytes", ph.Filename, len(pb))
+						photoDataURI = "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(pb)
+						photoBytes = pb
+						photoPath = "photos/" + userIDStr + "/" + resumeID.Hex() + photoExt
+					}
+				}
+			}
+		}
+	} else {
+		if err := c.Bind().JSON(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.Prompt == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "prompt is required")
+		}
 	}
 
 	resume, err := h.resumeStore.FindByID(context.Background(), resumeID)
@@ -298,10 +431,44 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 
 	h.resumeStore.SetStatus(context.Background(), resumeID, model.StatusGenerating)
 
+	// Upload photo to Nextcloud and cache if present
+	if photoBytes != nil {
+		if ncErr := h.ncStore.UploadFile(photoPath, photoBytes); ncErr != nil {
+			log.Printf("photo: nextcloud upload failed (non-fatal): %v", ncErr)
+		}
+		store.PutPhoto(resumeID.Hex(), photoBytes)
+	}
+
 	go func() {
 		ctx := context.Background()
 		resumeIDStr := resumeID.Hex()
 		NotifyStatusChanged(resumeIDStr, "generating", "Agent is refining your resume...", "")
+
+		// Reload resume from DB in the goroutine so we always have
+		// fresh StructuredData + HTMLContent for context.
+		freshResume, loadErr := h.resumeStore.FindByID(context.Background(), resumeID)
+		if loadErr == nil && freshResume != nil {
+			// Rebuild history with fresh data
+			history = nil
+			for _, rev := range freshResume.Revisions {
+				history = append(history, map[string]string{
+					"prompt": rev.Prompt,
+				})
+			}
+			if freshResume.StructuredData != nil {
+				if dataBytes, err := json.Marshal(freshResume.StructuredData); err == nil {
+					history = append(history, map[string]string{
+						"context": string(dataBytes),
+					})
+				}
+			}
+			if freshResume.HTMLContent != "" {
+				history = append(history, map[string]string{
+					"html": freshResume.HTMLContent,
+				})
+			}
+		}
+
 		result, err := h.resumeAgent.GenerateResume(
 			ctx,
 			userIDStr,
@@ -309,6 +476,7 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 			"",
 			req.Prompt,
 			history,
+			photoDataURI, // photoDataURI — empty if no photo uploaded
 		)
 		if err != nil {
 			h.resumeStore.SetStatus(ctx, resumeID, model.StatusFailed)
@@ -331,6 +499,9 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		}
 		if htmlData, ok := store.GetHTML(resumeIDStr); ok {
 			updateFields["html_content"] = string(htmlData)
+		}
+		if photoPath != "" {
+			updateFields["photo_path"] = photoPath
 		}
 		h.resumeStore.Update(ctx, resumeID, updateFields)
 		NotifyStatusChanged(resumeIDStr, "completed", "Resume design updated", result.HTMLPath)

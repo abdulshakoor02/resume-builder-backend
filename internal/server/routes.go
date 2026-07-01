@@ -28,6 +28,11 @@ func RegisterRoutes(
 	upload := api.Group("/upload")
 	upload.Post("/", uploadH.Upload)
 
+	// Public photo endpoint (no auth) — MUST be registered before
+	// the auth-protected resumes group, otherwise Fiber matches
+	// api/resumes/:id first and applies the auth middleware.
+	api.Get("/resumes/:id/photo", exportH.Photo)
+
 	resumes := api.Group("/resumes", AuthRequiredMiddleware(jwtSecret))
 	resumes.Post("/", resumeH.Create)
 	resumes.Get("/", resumeH.List)

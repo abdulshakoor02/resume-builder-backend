@@ -30,7 +30,7 @@ func Load() *Config {
 		LLMModel:          getEnv("LLM_MODEL", "gpt-4o"),
 		LLMBaseURL:        getEnv("LLM_BASE_URL", ""),
 		JWTSecret:      getEnv("JWT_SECRET", "dev-secret-change-in-production"),
-		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:1101,https://resume.wethinkdigital.solutions,http://resume.wethinkdigital.solutions"),
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:1101,https://resume.wethinkdigital.solutions,http://resume.wethinkdigital.solutions,https://resumeapi.wethinkdigital.solutions,http://resumeapi.wethinkdigital.solutions"),
 	}
 }
 

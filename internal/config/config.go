@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 type Config struct {
 	Port               string
@@ -15,6 +18,8 @@ type Config struct {
 	LLMBaseURL         string
 	JWTSecret          string
 	AllowedOrigins     string
+	FreeResumeLimit    int
+	FreeRevisionLimit  int
 }
 
 func Load() *Config {
@@ -31,12 +36,23 @@ func Load() *Config {
 		LLMBaseURL:        getEnv("LLM_BASE_URL", ""),
 		JWTSecret:      getEnv("JWT_SECRET", "dev-secret-change-in-production"),
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:1101,https://resume.wethinkdigital.solutions,http://resume.wethinkdigital.solutions,https://resumeapi.wethinkdigital.solutions,http://resumeapi.wethinkdigital.solutions"),
+		FreeResumeLimit:    getEnvInt("FREE_RESUME_LIMIT", 1),
+		FreeRevisionLimit: getEnvInt("FREE_REVISION_LIMIT", 1),
 	}
 }
 
 func getEnv(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if val := os.Getenv(key); val != "" {
+		if n, err := strconv.Atoi(val); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

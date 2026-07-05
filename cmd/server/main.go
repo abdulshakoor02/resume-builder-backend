@@ -54,12 +54,13 @@ func main() {
 	resumeAgent := agent.NewResumeAgent(providerFactory, ncStore)
 
 	authH := handler.NewAuthHandler(userStore, cfg.JWTSecret)
-	resumeH := handler.NewResumeHandler(resumeStore, uploadStore, ncStore, resumeAgent)
+	resumeH := handler.NewResumeHandler(resumeStore, uploadStore, ncStore, resumeAgent, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)
 	uploadH := handler.NewUploadHandler(ncStore, uploadStore)
 	exportH := handler.NewExportHandler(resumeStore, ncStore)
+	usageH := handler.NewUsageHandler(resumeStore, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)
 
 	app := server.New(cfg)
-	server.RegisterRoutes(app, authH, resumeH, uploadH, exportH, cfg.JWTSecret)
+	server.RegisterRoutes(app, authH, resumeH, uploadH, exportH, usageH, cfg.JWTSecret)
 
 	go func() {
 		if err := app.Listen(":" + cfg.Port); err != nil {

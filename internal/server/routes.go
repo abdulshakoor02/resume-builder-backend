@@ -11,6 +11,7 @@ func RegisterRoutes(
 	resumeH *handler.ResumeHandler,
 	uploadH *handler.UploadHandler,
 	exportH *handler.ExportHandler,
+	usageH *handler.UsageHandler,
 	jwtSecret string,
 ) {
 	api := app.Group("/api")
@@ -24,6 +25,9 @@ func RegisterRoutes(
 	auth := api.Group("/auth")
 	auth.Post("/signup", authH.Signup)
 	auth.Post("/login", authH.Login)
+
+	usage := api.Group("/usage", AuthRequiredMiddleware(jwtSecret))
+	usage.Get("/", usageH.GetUsage)
 
 	upload := api.Group("/upload")
 	upload.Post("/", uploadH.Upload)

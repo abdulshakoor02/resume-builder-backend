@@ -35,6 +35,15 @@ type UploadFileResponse struct {
 	ExtractedText string `json:"extracted_text"`
 }
 
+type UsageResponse struct {
+	ResumesCreated    int  `json:"resumes_created"`
+	TotalRevisions    int  `json:"total_revisions"`
+	FreeResumeLimit   int  `json:"free_resume_limit"`
+	FreeRevisionLimit int  `json:"free_revision_limit"`
+	CanCreate         bool `json:"can_create"`
+	CanRevise         bool `json:"can_revise"`
+}
+
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message,omitempty"`

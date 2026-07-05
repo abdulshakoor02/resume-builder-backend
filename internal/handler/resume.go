@@ -22,10 +22,12 @@ import (
 )
 
 type ResumeHandler struct {
-	resumeStore *store.ResumeStore
-	uploadStore *store.UploadStore
-	ncStore     *store.NextcloudStore
-	resumeAgent *agent.ResumeAgent
+	resumeStore       *store.ResumeStore
+	uploadStore       *store.UploadStore
+	ncStore           *store.NextcloudStore
+	resumeAgent       *agent.ResumeAgent
+	freeResumeLimit   int
+	freeRevisionLimit int
 }
 
 func NewResumeHandler(
@@ -33,12 +35,16 @@ func NewResumeHandler(
 	uploadStore *store.UploadStore,
 	ncStore *store.NextcloudStore,
 	resumeAgent *agent.ResumeAgent,
+	freeResumeLimit int,
+	freeRevisionLimit int,
 ) *ResumeHandler {
 	return &ResumeHandler{
-		resumeStore: resumeStore,
-		uploadStore: uploadStore,
-		ncStore:     ncStore,
-		resumeAgent: resumeAgent,
+		resumeStore:       resumeStore,
+		uploadStore:       uploadStore,
+		ncStore:           ncStore,
+		resumeAgent:       resumeAgent,
+		freeResumeLimit:   freeResumeLimit,
+		freeRevisionLimit: freeRevisionLimit,
 	}
 }
 
@@ -50,6 +56,20 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid user id")
+	}
+
+	// Check free tier resume limit
+	completed, err := h.resumeStore.CountCompletedResumes(context.Background(), userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to check usage")
+	}
+	if completed >= h.freeResumeLimit {
+		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
+			"error":          "free_limit_reached",
+			"message":        "You have reached the free resume limit. Please upgrade to create more resumes.",
+			"resumes_created": completed,
+			"limit":          h.freeResumeLimit,
+		})
 	}
 
 	// Parse files early so form is available in both branches
@@ -411,6 +431,20 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 	resume, err := h.resumeStore.FindByID(context.Background(), resumeID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "resume not found")
+	}
+
+	// Check free tier revision limit
+	revisionCount, err := h.resumeStore.CountTotalRevisions(context.Background(), resume.UserID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to check usage")
+	}
+	if revisionCount >= h.freeRevisionLimit {
+		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
+			"error":           "free_limit_reached",
+			"message":         "You have reached the free revision limit. Please upgrade for unlimited revisions.",
+			"total_revisions": revisionCount,
+			"limit":           h.freeRevisionLimit,
+		})
 	}
 
 	var history []map[string]string

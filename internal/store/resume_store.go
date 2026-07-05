@@ -89,3 +89,35 @@ func (s *ResumeStore) PushRevision(ctx context.Context, id primitive.ObjectID, r
 func (s *ResumeStore) SetStatus(ctx context.Context, id primitive.ObjectID, status model.ResumeStatus) error {
 	return s.Update(ctx, id, bson.M{"status": status})
 }
+
+func (s *ResumeStore) CountCompletedResumes(ctx context.Context, userID primitive.ObjectID) (int, error) {
+	count, err := s.coll.CountDocuments(ctx, bson.M{
+		"user_id": userID,
+		"status":  model.StatusCompleted,
+	})
+	return int(count), err
+}
+
+func (s *ResumeStore) CountTotalRevisions(ctx context.Context, userID primitive.ObjectID) (int, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"user_id": userID}}},
+		{{Key: "$project", Value: bson.M{"revision_count": bson.M{"$size": "$revisions"}}}},
+		{{Key: "$group", Value: bson.M{"_id": nil, "total": bson.M{"$sum": "$revision_count"}}}},
+	}
+	cursor, err := s.coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var results []struct {
+		Total int `bson:"total"`
+	}
+	if err := cursor.All(ctx, &results); err != nil {
+		return 0, err
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+	return results[0].Total, nil
+}

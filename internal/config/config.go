@@ -3,17 +3,18 @@ package config
 import "os"
 
 type Config struct {
-	Port              string
-	MongoURI          string
-	MongoDB           string
-	NextcloudBaseURL  string
-	NextcloudUser     string
-	NextcloudPass     string
+	Port               string
+	MongoURI           string
+	MongoDB            string
+	NextcloudBaseURL   string
+	NextcloudUser      string
+	NextcloudPass      string
 	NextcloudShareBase string
-	LLMAPIKey         string
-	LLMModel          string
-	LLMBaseURL        string
-	JWTSecret         string
+	LLMAPIKey          string
+	LLMModel           string
+	LLMBaseURL         string
+	JWTSecret          string
+	AllowedOrigins     string
 }
 
 func Load() *Config {
@@ -28,7 +29,8 @@ func Load() *Config {
 		LLMAPIKey:         getEnv("LLM_API_KEY", ""),
 		LLMModel:          getEnv("LLM_MODEL", "gpt-4o"),
 		LLMBaseURL:        getEnv("LLM_BASE_URL", ""),
-		JWTSecret:         getEnv("JWT_SECRET", "dev-secret-change-in-production"),
+		JWTSecret:      getEnv("JWT_SECRET", "dev-secret-change-in-production"),
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:1101,https://resume.wethinkdigital.solutions,http://resume.wethinkdigital.solutions"),
 	}
 }
 

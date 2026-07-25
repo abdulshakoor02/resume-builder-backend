@@ -1,7 +1,6 @@
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY app /app
-COPY .env /app/.env
 WORKDIR /app
 EXPOSE 1100
 CMD ["./app"]

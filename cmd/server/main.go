@@ -56,7 +56,15 @@ func main() {
 	resumeAgent := agent.NewResumeAgent(providerFactory, ncStore, anydocClient)
 
 	authH := handler.NewAuthHandler(userStore, cfg.JWTSecret)
-	resumeH := handler.NewResumeHandler(resumeStore, uploadStore, ncStore, resumeAgent, anydocClient)
+	resumeH := handler.NewResumeHandler(
+		resumeStore,
+		uploadStore,
+		ncStore,
+		resumeAgent,
+		anydocClient,
+		cfg.FreeResumeLimit,
+		cfg.FreeRevisionLimit,
+	)
 	uploadH := handler.NewUploadHandler(ncStore, uploadStore, anydocClient)
 	exportH := handler.NewExportHandler(resumeStore, ncStore)
 	usageH := handler.NewUsageHandler(resumeStore, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)

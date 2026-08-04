@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pontus-devoteam/agent-sdk-go/pkg/runner"
+	"github.com/resume-builder/backend/internal/converter"
 	"github.com/resume-builder/backend/internal/store"
 	"github.com/resume-builder/backend/pkg/llm"
 )
@@ -17,9 +18,10 @@ type ResumeAgent struct {
 	runner   *runner.Runner
 	provider *llm.ProviderFactory
 	ncStore  *store.NextcloudStore
+	anydoc   *converter.Client
 }
 
-func NewResumeAgent(cfg *llm.ProviderFactory, ncStore *store.NextcloudStore) *ResumeAgent {
+func NewResumeAgent(cfg *llm.ProviderFactory, ncStore *store.NextcloudStore, anydoc *converter.Client) *ResumeAgent {
 	r := runner.NewRunner()
 	if cfg != nil {
 		r.WithDefaultProvider(cfg.GetProvider())
@@ -28,6 +30,7 @@ func NewResumeAgent(cfg *llm.ProviderFactory, ncStore *store.NextcloudStore) *Re
 		runner:   r,
 		provider: cfg,
 		ncStore:  ncStore,
+		anydoc:   anydoc,
 	}
 }
 
@@ -58,6 +61,7 @@ func (a *ResumeAgent) GenerateResume(
 
 	toolCtx := &ToolContext{
 		NCStore:     a.ncStore,
+		Anydoc:      a.anydoc,
 		UserID:      userID,
 		ResumeID:    resumeID,
 		RevisionNum: 0,

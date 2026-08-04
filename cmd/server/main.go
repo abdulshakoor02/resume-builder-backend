@@ -10,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/resume-builder/backend/internal/agent"
 	"github.com/resume-builder/backend/internal/config"
+	"github.com/resume-builder/backend/internal/converter"
 	"github.com/resume-builder/backend/internal/handler"
 	"github.com/resume-builder/backend/internal/server"
 	"github.com/resume-builder/backend/internal/store"
@@ -51,11 +52,12 @@ func main() {
 		log.Printf("LLM provider configured: model=%s base_url=%s", cfg.LLMModel, cfg.LLMBaseURL)
 	}
 
-	resumeAgent := agent.NewResumeAgent(providerFactory, ncStore)
+	anydocClient := converter.NewClient(cfg.AnydocURL, cfg.AnydocToken)
+	resumeAgent := agent.NewResumeAgent(providerFactory, ncStore, anydocClient)
 
 	authH := handler.NewAuthHandler(userStore, cfg.JWTSecret)
-	resumeH := handler.NewResumeHandler(resumeStore, uploadStore, ncStore, resumeAgent, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)
-	uploadH := handler.NewUploadHandler(ncStore, uploadStore)
+	resumeH := handler.NewResumeHandler(resumeStore, uploadStore, ncStore, resumeAgent, anydocClient)
+	uploadH := handler.NewUploadHandler(ncStore, uploadStore, anydocClient)
 	exportH := handler.NewExportHandler(resumeStore, ncStore)
 	usageH := handler.NewUsageHandler(resumeStore, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)
 

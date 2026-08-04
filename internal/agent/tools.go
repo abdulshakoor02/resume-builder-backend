@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/pontus-devoteam/agent-sdk-go/pkg/tool"
-	"github.com/resume-builder/backend/internal/parser"
+	"github.com/resume-builder/backend/internal/converter"
 	"github.com/resume-builder/backend/internal/store"
 )
 
 type ToolContext struct {
 	NCStore     *store.NextcloudStore
+	Anydoc      *converter.Client
 	UserID      string
 	ResumeID    string
 	RevisionNum int
@@ -45,9 +46,12 @@ func (tc *ToolContext) extractDocxTool() tool.Tool {
 			if err != nil {
 				return nil, fmt.Errorf("download file: %w", err)
 			}
-			text, err := parser.ExtractDocxText(data)
+			if tc.Anydoc == nil {
+				return nil, fmt.Errorf("anydoc client is not configured")
+			}
+			text, err := tc.Anydoc.ConvertWithFallback(ctx, data, path)
 			if err != nil {
-				return nil, fmt.Errorf("parse docx: %w", err)
+				return nil, fmt.Errorf("parse document: %w", err)
 			}
 			return map[string]interface{}{"extracted_text": text, "path": path}, nil
 		},
@@ -73,9 +77,12 @@ func (tc *ToolContext) extractPDFTool() tool.Tool {
 			if err != nil {
 				return nil, fmt.Errorf("download file: %w", err)
 			}
-			text, err := parser.ExtractPDFText(data)
+			if tc.Anydoc == nil {
+				return nil, fmt.Errorf("anydoc client is not configured")
+			}
+			text, err := tc.Anydoc.ConvertWithFallback(ctx, data, path)
 			if err != nil {
-				return nil, fmt.Errorf("parse pdf: %w", err)
+				return nil, fmt.Errorf("parse document: %w", err)
 			}
 			return map[string]interface{}{"extracted_text": text, "path": path}, nil
 		},
@@ -140,10 +147,10 @@ func (tc *ToolContext) extractResumeDataTool() tool.Tool {
 			log.Printf("tool extract_resume_data: first 300 chars: %.300s", rawText)
 
 			return map[string]interface{}{
-				"status":       "ready",
-				"char_count":   len(rawText),
+				"status":          "ready",
+				"char_count":      len(rawText),
 				"raw_text_loaded": true,
-				"instruction": "You have the raw text. Now output a COMPLETE structured JSON with ALL sections and EVERY detail. Do NOT omit anything. Include: name, title, email, phone, location, linkedin, website, summary (preserve original wording), and ALL sections (experience, education, skills, certifications, projects, languages). For each section item, include every date, company, description line, and bullet point exactly as in the source. Return the structured JSON, then proceed to write the HTML.",
+				"instruction":     "You have the raw text. Now output a COMPLETE structured JSON with ALL sections and EVERY detail. Do NOT omit anything. Include: name, title, email, phone, location, linkedin, website, summary (preserve original wording), and ALL sections (experience, education, skills, certifications, projects, languages). For each section item, include every date, company, description line, and bullet point exactly as in the source. Return the structured JSON, then proceed to write the HTML.",
 			}, nil
 		},
 	).WithSchema(map[string]interface{}{

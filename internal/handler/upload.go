@@ -6,19 +6,20 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/resume-builder/backend/internal/converter"
 	"github.com/resume-builder/backend/internal/model"
-	"github.com/resume-builder/backend/internal/parser"
 	"github.com/resume-builder/backend/internal/store"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type UploadHandler struct {
-	ncStore    *store.NextcloudStore
+	ncStore     *store.NextcloudStore
 	uploadStore *store.UploadStore
+	anydoc      *converter.Client
 }
 
-func NewUploadHandler(ncStore *store.NextcloudStore, uploadStore *store.UploadStore) *UploadHandler {
-	return &UploadHandler{ncStore: ncStore, uploadStore: uploadStore}
+func NewUploadHandler(ncStore *store.NextcloudStore, uploadStore *store.UploadStore, anydoc *converter.Client) *UploadHandler {
+	return &UploadHandler{ncStore: ncStore, uploadStore: uploadStore, anydoc: anydoc}
 }
 
 func (h *UploadHandler) Upload(c fiber.Ctx) error {
@@ -55,27 +56,22 @@ func (h *UploadHandler) Upload(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to upload to Nextcloud: "+err.Error())
 	}
 
-	var extractedText string
-	switch ext {
-	case ".docx":
-		extractedText, err = parser.ExtractDocxText(fileBytes)
-	case ".pdf":
-		extractedText, err = parser.ExtractPDFText(fileBytes)
-	default:
-		return fiber.NewError(fiber.StatusBadRequest, "unsupported file type: "+ext)
+	if h.anydoc == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "document converter is not configured")
 	}
+	extractedText, err := h.anydoc.ConvertWithFallback(c.Context(), fileBytes, file.Filename)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to parse file: "+err.Error())
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to parse file")
 	}
 
 	upload := model.Upload{
-		ID:             primitive.NewObjectID(),
-		UserID:         userID,
-		FileName:       file.Filename,
-		NextcloudPath:  remotePath,
-		MimeType:       getMimeType(ext),
-		ExtractedText:  extractedText,
-		CreatedAt:      time.Now(),
+		ID:            primitive.NewObjectID(),
+		UserID:        userID,
+		FileName:      file.Filename,
+		NextcloudPath: remotePath,
+		MimeType:      getMimeType(ext),
+		ExtractedText: extractedText,
+		CreatedAt:     time.Now(),
 	}
 
 	if err := h.uploadStore.Create(context.Background(), &upload); err != nil {

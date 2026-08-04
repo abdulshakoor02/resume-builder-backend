@@ -14,8 +14,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/resume-builder/backend/internal/agent"
+	"github.com/resume-builder/backend/internal/converter"
 	"github.com/resume-builder/backend/internal/model"
-	"github.com/resume-builder/backend/internal/parser"
 	"github.com/resume-builder/backend/internal/store"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -26,6 +26,7 @@ type ResumeHandler struct {
 	uploadStore       *store.UploadStore
 	ncStore           *store.NextcloudStore
 	resumeAgent       *agent.ResumeAgent
+	anydoc            *converter.Client
 	freeResumeLimit   int
 	freeRevisionLimit int
 }
@@ -35,6 +36,7 @@ func NewResumeHandler(
 	uploadStore *store.UploadStore,
 	ncStore *store.NextcloudStore,
 	resumeAgent *agent.ResumeAgent,
+	anydoc *converter.Client,
 	freeResumeLimit int,
 	freeRevisionLimit int,
 ) *ResumeHandler {
@@ -43,6 +45,7 @@ func NewResumeHandler(
 		uploadStore:       uploadStore,
 		ncStore:           ncStore,
 		resumeAgent:       resumeAgent,
+		anydoc:            anydoc,
 		freeResumeLimit:   freeResumeLimit,
 		freeRevisionLimit: freeRevisionLimit,
 	}
@@ -65,17 +68,17 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 	}
 	if completed >= h.freeResumeLimit {
 		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
-			"error":          "free_limit_reached",
-			"message":        "You have reached the free resume limit. Please upgrade to create more resumes.",
+			"error":           "free_limit_reached",
+			"message":         "You have reached the free resume limit. Please upgrade to create more resumes.",
 			"resumes_created": completed,
-			"limit":          h.freeResumeLimit,
+			"limit":           h.freeResumeLimit,
 		})
 	}
 
 	// Parse files early so form is available in both branches
 	form, err := c.MultipartForm()
 	hasFiles := form != nil && form.File != nil && len(form.File["files"]) > 0
-	
+
 	log.Printf("MultipartForm: err=%v hasFiles=%v formKeys=%v", err, hasFiles, func() []string {
 		if form == nil || form.File == nil {
 			return nil
@@ -194,23 +197,12 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 				log.Printf("nextcloud upload failed for %s (continuing with local extraction): %v", fileHeader.Filename, err)
 			}
 
-			switch ext {
-			case ".docx":
-				text, err := parser.ExtractDocxText(fileBytes)
-				if err != nil {
-					log.Printf("docx extraction failed for %s: %v", fileHeader.Filename, err)
-				} else {
-					upload.ExtractedText = text
-				}
-		case ".pdf":
-				// Try PDF text-layer parser first (works well for text-based PDFs).
-				text, err := parser.ExtractPDFText(fileBytes)
-				if err != nil {
-					log.Printf("pdf text extraction failed for %s: %v", fileHeader.Filename, err)
-				} else {
-					upload.ExtractedText = text
-					log.Printf("pdf text parser produced %d chars for %s", len(text), fileHeader.Filename)
-				}
+			if h.anydoc == nil {
+				log.Printf("anydoc client is not configured")
+			} else if text, conversionErr := h.anydoc.ConvertWithFallback(context.Background(), fileBytes, fileHeader.Filename); conversionErr != nil {
+				log.Printf("document extraction failed for %s: %v", fileHeader.Filename, conversionErr)
+			} else {
+				upload.ExtractedText = text
 			}
 
 			ctx := context.Background()
@@ -219,24 +211,11 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			}
 
 			if upload.ExtractedText != "" {
-				log.Printf("extracted text from %s: %d chars, preview: %.200s", fileHeader.Filename, len(upload.ExtractedText), upload.ExtractedText)
+				log.Printf("extracted text from %s: %d chars", fileHeader.Filename, len(upload.ExtractedText))
 				if extractedText != "" {
 					extractedText += "\n\n---\n\n"
 				}
 				extractedText += upload.ExtractedText
-			} else {
-				log.Printf("no text layer in %s, trying vision-based extraction...", fileHeader.Filename)
-				visionText, visionErr := parser.ExtractPDFTextWithVision(fileBytes)
-				if visionErr != nil {
-					log.Printf("vision extraction also failed for %s: %v", fileHeader.Filename, visionErr)
-				} else if visionText != "" {
-					log.Printf("vision extraction succeeded for %s: %d chars", fileHeader.Filename, len(visionText))
-					upload.ExtractedText = visionText
-					if extractedText != "" {
-						extractedText += "\n\n---\n\n"
-					}
-					extractedText += visionText
-				}
 			}
 		}
 	}
@@ -254,7 +233,7 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		store.PutPhoto(resume.ID.Hex(), photoBytes)
 	}
 
-	log.Printf("resume created: id=%s title=%s status=generating prompt_len=%d extracted_text_len=%d", 
+	log.Printf("resume created: id=%s title=%s status=generating prompt_len=%d extracted_text_len=%d",
 		resume.ID.Hex(), title, len(prompt), len(extractedText))
 
 	// Check if agent is configured
@@ -277,8 +256,8 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			resumeID,
 			extractedText,
 			prompt,
-			nil,            // conversationHistory
-			photoDataURI,   // profile photo (base64 data URI or empty)
+			nil,          // conversationHistory
+			photoDataURI, // profile photo (base64 data URI or empty)
 		)
 		if err != nil {
 			log.Printf("agent failed for resume %s: %v", resumeID, err)

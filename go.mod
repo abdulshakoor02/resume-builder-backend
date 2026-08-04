@@ -3,13 +3,10 @@ module github.com/resume-builder/backend
 go 1.26.4
 
 require (
-	github.com/fumiama/go-docx v0.0.0-20250506085032-0c30fd09304b
 	github.com/gofiber/fiber/v3 v3.3.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/jung-kurt/gofpdf v1.16.2
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/pontus-devoteam/agent-sdk-go v0.0.9
 	github.com/studio-b12/gowebdav v0.12.0
 	go.mongodb.org/mongo-driver v1.17.9
@@ -18,7 +15,6 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.2.1 // indirect
-	github.com/fumiama/imgsz v0.0.2 // indirect
 	github.com/gofiber/schema v1.7.1 // indirect
 	github.com/gofiber/utils/v2 v2.0.6 // indirect
 	github.com/golang/snappy v0.0.4 // indirect

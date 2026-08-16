@@ -58,3 +58,7 @@ func (f *ProviderFactory) CreateAgent(name string) *agent.Agent {
 func (f *ProviderFactory) GetProvider() model.Provider {
 	return f.provider
 }
+
+func (f *ProviderFactory) ModelName() string {
+	return f.model
+}

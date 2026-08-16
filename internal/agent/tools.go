@@ -186,14 +186,17 @@ func (tc *ToolContext) generateHTMLTool() tool.Tool {
 			log.Printf("tool generate_html: storing HTML, length=%d key=%s", len(html), key)
 			store.PutHTML(key, []byte(html))
 
-			if tc.NCStore != nil {
-				if err := tc.NCStore.UploadFile(key, []byte(html)); err != nil {
-					log.Printf("generate_html: nextcloud upload failed for %s: %v", key, err)
-				}
-			}
-
 			// Also cache the HTML directly by resume ID for immediate retrieval
 			store.PutHTML(tc.ResumeID, []byte(html))
+
+			// Upload to Nextcloud asynchronously so we don't block the agent turn on I/O.
+			if tc.NCStore != nil {
+				go func(k string, data []byte) {
+					if err := tc.NCStore.UploadFile(k, data); err != nil {
+						log.Printf("generate_html: nextcloud async upload failed for %s: %v", k, err)
+					}
+				}(key, []byte(html))
+			}
 
 			return map[string]interface{}{
 				"html_key":     key,

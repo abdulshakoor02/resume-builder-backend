@@ -15,8 +15,33 @@ import (
 var htmlDocRegex = regexp.MustCompile("(?is)<!DOCTYPE[^>]*>.*</html>")
 var htmlTagRegex = regexp.MustCompile("(?is)<html.*</html>")
 
+// firstDocStart returns the offset of the document's first tag (or -1). Used to
+// drop any prose the model wrote before the document itself.
+func firstDocStart(s string) int {
+	lower := strings.ToLower(s)
+	doctype := strings.Index(lower, "<!doctype")
+	html := strings.Index(lower, "<html")
+	switch {
+	case doctype >= 0 && html >= 0:
+		if doctype < html {
+			return doctype
+		}
+		return html
+	case doctype >= 0:
+		return doctype
+	default:
+		return html
+	}
+}
+
 func extractHTML(s string) string {
 	c := strings.TrimSpace(s)
+	// Cut any conversational preamble before the document. Models open with
+	// "Here's a complete HTML resume ..." and a ```html fence, and the raw reply
+	// must not end up stored as part of the resume (it was, in production).
+	if idx := firstDocStart(c); idx > 0 {
+		c = strings.TrimSpace(c[idx:])
+	}
 	if strings.HasPrefix(c, "```") {
 		if idx := strings.Index(c, "\n"); idx >= 0 {
 			c = c[idx+1:]

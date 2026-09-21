@@ -84,7 +84,8 @@ Hard rules:
 - Keep the print rules from your instructions (@media print, A4, no broken entries).
 - If the reference uses a font you cannot load, use the closest Google Font.
 - Content fidelity outranks design fidelity: if reproducing a detail would drop or hide any real detail of the candidate's resume, keep the content and approximate the design.
-- Stay concise: reproduce the design with the candidate's actual content, never pad sections, repeat entries or add filler to fill space. A leaner document renders faster and reads better.`
+- Completeness first: every job, company, date, bullet, skill, certificate and number from the candidate's resume text must appear in the output. Never omit, merge or summarise content to save space, and never leave a section empty to fit the layout.
+- Reproduce the design using that real content; if the design has room for less than the candidate's content, let the document grow rather than dropping anything.`
 
 // PreserveDesignInstruction is used when a resume already carries a design (it has
 // a stored reference) but the refinement does not need the image again: the look

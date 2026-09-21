@@ -50,6 +50,9 @@ type chatResponse struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		// FinishReason is "stop" for a complete reply and "length" when the
+		// provider cut the model off mid-answer.
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -60,12 +63,12 @@ type chatResponse struct {
 //
 // It must NOT inherit LLM_VISION_MAX_TOKENS: that variable sizes the scanned-PDF
 // *extractor*, this deployment sets it to 100000, and an effectively unlimited
-// budget on a generation is what slowed design-referenced builds to a measured
-// 38.5s (against 6.5s for the same document without a reference) — the model
-// writes 18k+ characters where ~6k does. Generated documents run 6-20k
-// characters, so 8000 tokens is generous; LLM_GEN_MAX_TOKENS overrides it.
+// budget on a generation is what slowed design-referenced builds down (the model
+// padded documents to 18k+ characters where ~7k does). It must also stay
+// comfortably above a full resume — a document that runs into the cap is cut off
+// mid-markup and unusable. LLM_GEN_MAX_TOKENS overrides the default.
 func generationMaxTokens() int {
-	maxTokens := 8000
+	maxTokens := 12000
 	if v := os.Getenv("LLM_GEN_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			maxTokens = n
@@ -147,9 +150,23 @@ func (a *ResumeAgent) generateWithImage(ctx context.Context, systemPrompt, userI
 	}
 
 	content := parsed.Choices[0].Message.Content
-	log.Printf("generateWithImage: model=%s image_chars=%d done in %s content_len=%d",
-		model, len(imageDataURI), time.Since(start), len(content))
+	finish := parsed.Choices[0].FinishReason
+	log.Printf("generateWithImage: model=%s max_tokens=%d image_chars=%d done in %s content_len=%d finish_reason=%q",
+		model, generationMaxTokens(), len(imageDataURI), time.Since(start), len(content), finish)
+
+	// A partial reply must never be stored: the user would get a resume that
+	// breaks off in the middle of its own CSS (this happened in production). The
+	// error sends the request down the text-only path, which returns a complete
+	// document instead of half a designed one.
+	if finish == "length" || !looksComplete(extractHTML(content)) {
+		return "", fmt.Errorf("multimodal reply was incomplete (finish_reason=%q, %d chars)", finish, len(content))
+	}
 	return content, nil
+}
+
+// looksComplete reports whether a reply holds a whole HTML document.
+func looksComplete(html string) bool {
+	return strings.Contains(strings.ToLower(html), "</html>")
 }
 
 // designRefPromptBlock formats the design-reference instructions for the user

@@ -248,15 +248,23 @@ func (a *ResumeAgent) GenerateResume(
 			html, err := a.fastGenerate(ctx, FastSystemPrompt, fastInput)
 			fastElapsed := time.Since(start)
 			if err == nil && len(html) > 1000 {
-				log.Printf("agent: fast path succeeded in %s html_len=%d", fastElapsed, len(html))
-				// Inline the photo so the stored document doesn't depend on an
-				// authenticated URL (see inlinePhotoReference).
-				if photoDataURI != "" {
-					html = inlinePhotoReference(html, resumeID, photoDataURI)
+				if !looksComplete(html) {
+					// Never store a document that stops mid-markup: the user gets
+					// a resume that breaks off in the middle of its own CSS. The
+					// agent loop below rebuilds the document in full.
+					log.Printf("agent: fast path returned an incomplete document (%d chars, no closing </html>) - falling back to agent loop", len(html))
+				} else {
+					log.Printf("agent: fast path succeeded in %s html_len=%d", fastElapsed, len(html))
+					// Inline the photo so the stored document doesn't depend on an
+					// authenticated URL (see inlinePhotoReference).
+					if photoDataURI != "" {
+						html = inlinePhotoReference(html, resumeID, photoDataURI)
+					}
+					return a.storeFastResult(userID, resumeID, html, conversationHistory, fastElapsed, "fast_path"), nil
 				}
-				return a.storeFastResult(userID, resumeID, html, conversationHistory, fastElapsed, "fast_path"), nil
+			} else {
+				log.Printf("agent: fast path failed after %s: %v - falling back to agent loop", fastElapsed, err)
 			}
-			log.Printf("agent: fast path failed after %s: %v - falling back to agent loop", fastElapsed, err)
 		}
 	}
 

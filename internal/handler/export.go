@@ -65,6 +65,11 @@ func serveResume(c fiber.Ctx, data []byte) error {
 	}
 	c.Set("Content-Type", contentType)
 	c.Set("Content-Disposition", "inline; filename=\"resume.html\"")
+	// The dashboard re-reads this after every revision. Without an explicit
+	// directive the browser caches it heuristically and keeps rendering the
+	// previous document, so a change the user just made looks like it did
+	// nothing.
+	c.Set("Cache-Control", "no-store")
 	return c.Send(data)
 }
 
@@ -85,7 +90,7 @@ func (h *ExportHandler) Photo(c fiber.Ctx) error {
 	if data, ok := store.GetPhoto(resumeID); ok {
 		contentType := http.DetectContentType(data)
 		c.Set("Content-Type", contentType)
-		c.Set("Cache-Control", "private, max-age=300")
+		c.Set("Cache-Control", "private, max-age=0, must-revalidate")
 		return c.Send(data)
 	}
 
@@ -95,7 +100,7 @@ func (h *ExportHandler) Photo(c fiber.Ctx) error {
 		if p, pErr := h.photoStore.Get(c.Context(), resume.ID, userID); pErr == nil && p != nil && len(p.Data) > 0 {
 			store.PutPhoto(resumeID, p.Data)
 			c.Set("Content-Type", http.DetectContentType(p.Data))
-			c.Set("Cache-Control", "private, max-age=300")
+			c.Set("Cache-Control", "private, max-age=0, must-revalidate")
 			return c.Send(p.Data)
 		}
 	}
@@ -106,7 +111,7 @@ func (h *ExportHandler) Photo(c fiber.Ctx) error {
 			store.PutPhoto(resumeID, data)
 			contentType := http.DetectContentType(data)
 			c.Set("Content-Type", contentType)
-			c.Set("Cache-Control", "private, max-age=300")
+			c.Set("Cache-Control", "private, max-age=0, must-revalidate")
 			return c.Send(data)
 		}
 	}
@@ -114,7 +119,7 @@ func (h *ExportHandler) Photo(c fiber.Ctx) error {
 	if data, ok := store.GetUploadedFile(resumeID); ok {
 		contentType := http.DetectContentType(data)
 		c.Set("Content-Type", contentType)
-		c.Set("Cache-Control", "private, max-age=300")
+		c.Set("Cache-Control", "private, max-age=0, must-revalidate")
 		return c.Send(data)
 	}
 

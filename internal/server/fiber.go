@@ -30,7 +30,10 @@ func errorHandler(c fiber.Ctx, err error) error {
 	if e, ok := err.(*fiber.Error); ok {
 		code = e.Code
 	}
+	// Both keys: the dashboard/client reads `message`, older callers read `error`.
+	// Without `message` a 4xx/5xx reaches the UI as a bare status text.
 	return c.Status(code).JSON(fiber.Map{
-		"error": err.Error(),
+		"error":   err.Error(),
+		"message": err.Error(),
 	})
 }

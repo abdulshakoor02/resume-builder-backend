@@ -220,6 +220,21 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		}
 	}
 
+	// Refuse to invent a resume when the upload produced no text.
+	//
+	// With extractedText == "" the fast path degrades to "create a resume from
+	// this sentence", and the model happily returns a fully fabricated CV
+	// (placeholder name, fake employers) that the UI reports as "completed".
+	// Silent fabrication is worse than a visible failure: fail loudly and let
+	// the caller fix the input (text-based PDF / DOCX) or paste the content.
+	if hasFiles && extractedText == "" {
+		log.Printf("extraction produced no text from %d uploaded file(s) - refusing to generate from the prompt alone (prompt_len=%d)", len(form.File["files"]), len(prompt))
+		return fiber.NewError(fiber.StatusUnprocessableEntity,
+			"Couldn't read any text from your uploaded file, so there is nothing to redesign. "+
+				"The file may be a scanned or image-only PDF. Please upload a text-based PDF or DOCX, "+
+				"or paste your resume content into the instructions and we'll build from that.")
+	}
+
 	if err := h.resumeStore.Create(context.Background(), resume); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to create resume")
 	}

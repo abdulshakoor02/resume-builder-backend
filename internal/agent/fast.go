@@ -92,25 +92,6 @@ func (a *ResumeAgent) fastGenerate(ctx context.Context, systemPrompt, userInput 
 	return "", fmt.Errorf("fastGenerate: no HTML found in response (len=%d)", len(content))
 }
 
-func (a *ResumeAgent) storeHTMLResult(userID, resumeID, html string) *AgentResult {
-	revNum := 1
-	key := fmt.Sprintf("html/%s/%s/v%d.html", userID, resumeID, revNum)
-	store.PutHTML(key, []byte(html))
-	store.PutHTML(resumeID, []byte(html))
-	if a.ncStore != nil {
-		go func() {
-			if err := a.ncStore.UploadFile(key, []byte(html)); err != nil {
-				log.Printf("fast store: nc upload failed %s: %v", key, err)
-			}
-		}()
-	}
-	return &AgentResult{
-		HTMLPath:    key,
-		ResumeData:  map[string]interface{}{"source": "fast_path", "html_size": len(html)},
-		FinalOutput: html,
-	}
-}
-
 // storeFastResult caches a completed single-turn generation and builds its
 // AgentResult. Both the text-only fast path and the multimodal (design
 // reference) path end here, so they store identically; `source` is recorded in

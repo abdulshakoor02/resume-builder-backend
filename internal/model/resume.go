@@ -52,5 +52,6 @@ type DeleteResumeResponse struct {
 	FilesFailed       int      `json:"files_failed"`
 	CachePurged       int      `json:"cache_entries_purged"`
 	DesignRefsDeleted int64    `json:"design_refs_deleted,omitempty"`
+	PhotosDeleted     int64    `json:"photos_deleted,omitempty"`
 	Errors            []string `json:"errors,omitempty"`
 }

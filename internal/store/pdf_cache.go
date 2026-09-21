@@ -1,6 +1,8 @@
 package store
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -27,15 +29,50 @@ func (c *PDFCache) Get(key string) ([]byte, bool) {
 	return data, ok
 }
 
+// revisionKeyPattern matches the revision-keyed cache entries the agent writes
+// (`html/<user>/<resume>/v<N>.html`).
+var revisionKeyPattern = regexp.MustCompile(`v(\d+)\.html$`)
+
+// GetByResumeID returns the CURRENT document for a resume.
+//
+// It must never return an arbitrary match. Several entries for one resume
+// coexist in this map — every revision (`…/v1.html`, `…/v2.html`, …) plus the
+// bare resume-ID key — and Go randomises map iteration, so a first-match scan
+// served a random revision: the dashboard preview (which renders this through
+// /pdf) flickered between an old and the latest document, and a change made by
+// a later refine (e.g. an added profile photo) appeared to have had no effect.
+//
+// Order of preference: the bare resume-ID key (rewritten by every store, so it
+// holds the newest bytes), else the highest revision number, else the
+// lexicographically last key — deterministic in every case.
 func (c *PDFCache) GetByResumeID(resumeID string) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for key, data := range c.cache {
-		if strings.Contains(key, resumeID) {
-			return data, true
+
+	if data, ok := c.cache[resumeID]; ok {
+		return data, true
+	}
+
+	bestKey, bestRev := "", -1
+	for key := range c.cache {
+		if !strings.Contains(key, resumeID) {
+			continue
+		}
+		rev := -1
+		if m := revisionKeyPattern.FindStringSubmatch(key); m != nil {
+			if n, convErr := strconv.Atoi(m[1]); convErr == nil {
+				rev = n
+			}
+		}
+		if rev > bestRev || (rev == bestRev && key > bestKey) {
+			bestKey, bestRev = key, rev
 		}
 	}
-	return nil, false
+	if bestKey == "" {
+		return nil, false
+	}
+	data, ok := c.cache[bestKey]
+	return data, ok
 }
 
 func PutPDF(key string, data []byte) {

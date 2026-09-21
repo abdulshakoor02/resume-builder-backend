@@ -76,6 +76,24 @@ func extractExistingHTML(history []map[string]string) string {
 	return ""
 }
 
+// stripPhotoDataURI swaps an already-inlined profile photo back to its canonical
+// URL before existing HTML is handed to the model during a refinement.
+//
+// The inlined data URI is ~100KB of base64, while refine input is truncated to
+// 25k characters (see the fast and fallback refine branches). Left in place, the
+// photo is either truncated away entirely or cut in the middle of the base64
+// blob — turning the <img> into broken markup — so a resume that already had a
+// photo silently lost it on the next change. Replacing it with the short URL
+// keeps the placeholder well inside the model's context; the bytes are inlined
+// again after generation (buildPhotoBlock tells the model to keep the tag, and
+// inlinePhotoReference re-expands it).
+func stripPhotoDataURI(html, photoDataURI, photoURL string) string {
+	if html == "" || photoDataURI == "" || photoURL == "" {
+		return html
+	}
+	return strings.ReplaceAll(html, photoDataURI, photoURL)
+}
+
 // photoURLPattern matches the photo URL buildPhotoBlock hands the model
 // (`<apiBase>/api/resumes/<24-hex id>/photo`), whatever apiBase this deployment
 // uses.
@@ -145,6 +163,10 @@ func (a *ResumeAgent) GenerateResume(
 		if len(conversationHistory) > 0 {
 			// Refine: use existing HTML (truncated) + new prompt + photo block
 			html := extractExistingHTML(conversationHistory)
+			// An already-inlined photo would blow (and then be cut by) the
+			// truncation below — hand the model the short URL instead; the
+			// bytes are inlined again after generation.
+			html = stripPhotoDataURI(html, photoDataURI, photoURL)
 			// If HTML is huge, truncate to keep input bounded
 			htmlTrim := truncateStr(html, 25000)
 			// Find structured context optionally for extra fidelity (truncated)
@@ -264,6 +286,7 @@ func (a *ResumeAgent) GenerateResume(
 		input = fmt.Sprintf("REFINE this resume based on: %s\n\n", prompt)
 		html := extractExistingHTML(conversationHistory)
 		if html != "" {
+			html = stripPhotoDataURI(html, photoDataURI, photoURL)
 			html = truncateStr(html, 25000)
 			input += fmt.Sprintf("=== EXISTING RESUME HTML (modify this, keep everything except the requested changes) ===\n%s\n=== END EXISTING HTML ===\n\n", html)
 		}

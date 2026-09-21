@@ -11,10 +11,11 @@ import (
 type ExportHandler struct {
 	resumeStore *store.ResumeStore
 	ncStore     *store.NextcloudStore
+	photoStore  *store.PhotoStore
 }
 
-func NewExportHandler(resumeStore *store.ResumeStore, ncStore *store.NextcloudStore) *ExportHandler {
-	return &ExportHandler{resumeStore: resumeStore, ncStore: ncStore}
+func NewExportHandler(resumeStore *store.ResumeStore, ncStore *store.NextcloudStore, photoStore *store.PhotoStore) *ExportHandler {
+	return &ExportHandler{resumeStore: resumeStore, ncStore: ncStore, photoStore: photoStore}
 }
 
 func (h *ExportHandler) Download(c fiber.Ctx) error {
@@ -86,6 +87,17 @@ func (h *ExportHandler) Photo(c fiber.Ctx) error {
 		c.Set("Content-Type", contentType)
 		c.Set("Cache-Control", "private, max-age=300")
 		return c.Send(data)
+	}
+
+	// Durable copy next: the object store mirror is unreliable, and the cache
+	// above is empty after a restart.
+	if h.photoStore != nil {
+		if p, pErr := h.photoStore.Get(c.Context(), resume.ID, userID); pErr == nil && p != nil && len(p.Data) > 0 {
+			store.PutPhoto(resumeID, p.Data)
+			c.Set("Content-Type", http.DetectContentType(p.Data))
+			c.Set("Cache-Control", "private, max-age=300")
+			return c.Send(p.Data)
+		}
 	}
 
 	// If photo_path is stored in DB, try to fetch from Nextcloud

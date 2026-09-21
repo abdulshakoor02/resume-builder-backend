@@ -27,6 +27,7 @@ type ResumeHandler struct {
 	uploadStore       *store.UploadStore
 	ncStore           *store.NextcloudStore
 	designRefStore    *store.DesignRefStore
+	photoStore        *store.PhotoStore
 	resumeAgent       *agent.ResumeAgent
 	anydoc            *converter.Client
 	freeResumeLimit   int
@@ -43,6 +44,7 @@ func NewResumeHandler(
 	uploadStore *store.UploadStore,
 	ncStore *store.NextcloudStore,
 	designRefStore *store.DesignRefStore,
+	photoStore *store.PhotoStore,
 	resumeAgent *agent.ResumeAgent,
 	anydoc *converter.Client,
 	freeResumeLimit int,
@@ -53,6 +55,7 @@ func NewResumeHandler(
 		uploadStore:       uploadStore,
 		ncStore:           ncStore,
 		designRefStore:    designRefStore,
+		photoStore:        photoStore,
 		resumeAgent:       resumeAgent,
 		anydoc:            anydoc,
 		freeResumeLimit:   freeResumeLimit,
@@ -293,6 +296,13 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			log.Printf("photo: nextcloud upload failed (non-fatal): %v", ncErr)
 		}
 		store.PutPhoto(resume.ID.Hex(), photoBytes)
+		// Durable copy: the object store is broken and the cache dies with the
+		// process, so /photo and later refinements need these bytes in Mongo.
+		if h.photoStore != nil {
+			if pErr := h.photoStore.Put(context.Background(), resume.ID, userID, http.DetectContentType(photoBytes), photoBytes); pErr != nil {
+				log.Printf("photo: persist failed, /photo may 404 after a restart: %v", pErr)
+			}
+		}
 	}
 
 	// Persist the design reference so later refinements keep the same look. The
@@ -497,6 +507,15 @@ func (h *ResumeHandler) Delete(c fiber.Ctx) error {
 		}
 	}
 
+	// Same for the profile photo bytes.
+	if h.photoStore != nil {
+		if photosDeleted, pErr := h.photoStore.DeleteByResumeID(ctx, resume.ID, userID); pErr != nil {
+			log.Printf("delete resume %s: photo delete failed: %v", resumeHex, pErr)
+		} else {
+			resp.PhotosDeleted = photosDeleted
+		}
+	}
+
 	deleted, err := h.resumeStore.DeleteByID(ctx, resume.ID, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete resume")
@@ -511,6 +530,42 @@ func (h *ResumeHandler) Delete(c fiber.Ctx) error {
 	log.Printf("delete resume %s: objects=%d failed=%d uploads=%d cache_purged=%d",
 		resumeHex, resp.FilesDeleted, resp.FilesFailed, resp.UploadsDeleted, resp.CachePurged)
 	return c.JSON(resp)
+}
+
+// loadStoredPhoto returns the resume's existing profile photo as a data URI,
+// looking in the in-process cache, then the object store, then the durable Mongo
+// copy. Empty when the resume has no photo anywhere (or the stored bytes are not
+// a usable image).
+func (h *ResumeHandler) loadStoredPhoto(resumeID, userID primitive.ObjectID, photoPath string) string {
+	hex := resumeID.Hex()
+	if data, ok := store.GetPhoto(hex); ok && len(data) > 0 {
+		return photoDataURIFor(data, "cache")
+	}
+	if photoPath != "" && h.ncStore != nil {
+		if data, err := h.ncStore.DownloadFile(photoPath); err == nil && len(data) > 0 {
+			store.PutPhoto(hex, data)
+			return photoDataURIFor(data, "object store")
+		}
+	}
+	if h.photoStore != nil {
+		if p, err := h.photoStore.Get(context.Background(), resumeID, userID); err == nil && p != nil && len(p.Data) > 0 {
+			store.PutPhoto(hex, p.Data)
+			return photoDataURIFor(p.Data, "mongodb")
+		}
+	}
+	return ""
+}
+
+// photoDataURIFor validates stored photo bytes and encodes them, naming the
+// source in the log so a missing avatar is diagnosable after the fact.
+func photoDataURIFor(data []byte, source string) string {
+	ct := http.DetectContentType(data)
+	if ct != "image/jpeg" && ct != "image/png" && ct != "image/webp" {
+		log.Printf("photo: stored bytes are %s, not an image (source=%s) - ignoring", ct, source)
+		return ""
+	}
+	log.Printf("photo: reusing stored photo (%d bytes, source=%s)", len(data), source)
+	return "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 func (h *ResumeHandler) Refine(c fiber.Ctx) error {
@@ -647,12 +702,21 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 
 	h.resumeStore.SetStatus(context.Background(), resumeID, model.StatusGenerating)
 
-	// Upload photo to Nextcloud and cache if present
+	// Profile photo: a newly attached one is stored; otherwise reuse whatever the
+	// resume already has, so the avatar survives a refinement that doesn't
+	// re-attach it (and so it can be re-inlined after generation).
 	if photoBytes != nil {
 		if ncErr := h.ncStore.UploadFile(photoPath, photoBytes); ncErr != nil {
 			log.Printf("photo: nextcloud upload failed (non-fatal): %v", ncErr)
 		}
 		store.PutPhoto(resumeID.Hex(), photoBytes)
+		if h.photoStore != nil {
+			if pErr := h.photoStore.Put(context.Background(), resumeID, userID, http.DetectContentType(photoBytes), photoBytes); pErr != nil {
+				log.Printf("photo: persist failed, later refinements may lose the avatar: %v", pErr)
+			}
+		}
+	} else {
+		photoDataURI = h.loadStoredPhoto(resumeID, userID, resume.PhotoPath)
 	}
 
 	go func() {

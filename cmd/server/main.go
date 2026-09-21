@@ -44,6 +44,7 @@ func main() {
 	resumeStore := store.NewResumeStore(mongoStore.DB)
 	uploadStore := store.NewUploadStore(mongoStore.DB)
 	designRefStore := store.NewDesignRefStore(mongoStore.DB)
+	photoStore := store.NewPhotoStore(mongoStore.DB)
 
 	providerFactory, err := llm.NewProviderFactory(cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMBaseURL)
 	if err != nil {
@@ -62,13 +63,14 @@ func main() {
 		uploadStore,
 		ncStore,
 		designRefStore,
+		photoStore,
 		resumeAgent,
 		anydocClient,
 		cfg.FreeResumeLimit,
 		cfg.FreeRevisionLimit,
 	)
 	uploadH := handler.NewUploadHandler(ncStore, uploadStore, anydocClient)
-	exportH := handler.NewExportHandler(resumeStore, ncStore)
+	exportH := handler.NewExportHandler(resumeStore, ncStore, photoStore)
 	usageH := handler.NewUsageHandler(resumeStore, cfg.FreeResumeLimit, cfg.FreeRevisionLimit)
 
 	app := server.New(cfg)

@@ -69,6 +69,38 @@ OUTPUT: Return ONLY the HTML document. No explanation. No markdown fences.`
 // attached a design reference image. The image itself travels as a multimodal
 // content part (see agent.generateWithImage), so these instructions only need to
 // say what to take from it — and what never to take from it.
+// DesignSpecInstructions introduces the design read from a reference image.
+//
+// The document itself is then generated text-only, so the prompt must describe
+// the design instead of pointing at an image that is no longer attached.
+const DesignSpecInstructions = `The candidate supplied a reference resume design. It has been read for you and is described below. Reproduce that design — its layout, columns, palette, typography, header treatment and section order — using the candidate's real content.`
+
+// DesignSpecSystemPrompt / DesignSpecUserPrompt read a reference image once and
+// write the design down as text.
+//
+// This exists because asking the model to write a long document *while* looking
+// at the image does not work on this provider: an image plus a full resume
+// exceeds the output budget and the reply is cut off mid-document (measured:
+// finish_reason "length" at 16107 characters, with max_tokens at 12000). Reading
+// the design first keeps the image in exactly one short call, and the document
+// then gets the whole budget.
+const DesignSpecSystemPrompt = `You read a reference resume design and write down exactly what it looks like, so that another pass can reproduce it without seeing the image.`
+
+const DesignSpecUserPrompt = `Describe the design of the resume in this image so it can be rebuilt as HTML/CSS.
+
+Cover, in this order:
+1. Overall layout: single column or sidebar; which side; the sidebar's width as a fraction of the page.
+2. Colour palette: every colour as a hex value, each labelled with what it is used for (page background, sidebar background, headings, body text, accents, rules and borders, badges).
+3. Typography: serif or sans-serif for headings and for body text; relative sizes; weights; any uppercase or letter-spacing treatment.
+4. Header: where the name, title and contact details sit and how they are styled; any photo and its shape.
+5. Section order, and how section headings are styled (rules, icons, uppercase, numbering).
+6. Entries: how job and education entries are laid out (title line, company, dates, bullet style).
+7. Decoration: dividers, pills or badges, progress bars, timelines, icons, spacing.
+
+Answer with short labelled lines only, under 250 words. No HTML, no code, no commentary.`
+
+// DesignRefInstructions is used when a reference image was attached but could
+// not be read (see DesignSpecInstructions for the normal path).
 const DesignRefInstructions = `DESIGN REFERENCE (image attached): reproduce the look of the attached image as closely as you can.
 
 Match, in order of visual importance:

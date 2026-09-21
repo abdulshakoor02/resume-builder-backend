@@ -158,7 +158,7 @@ func (a *ResumeAgent) generateWithImage(ctx context.Context, systemPrompt, userI
 	// breaks off in the middle of its own CSS (this happened in production). The
 	// error sends the request down the text-only path, which returns a complete
 	// document instead of half a designed one.
-	if finish == "length" || !looksComplete(extractHTML(content)) {
+	if finish == "length" || (strings.Contains(strings.ToLower(content), "<html") && !looksComplete(extractHTML(content))) {
 		return "", fmt.Errorf("multimodal reply was incomplete (finish_reason=%q, %d chars)", finish, len(content))
 	}
 	return content, nil
@@ -168,6 +168,34 @@ func (a *ResumeAgent) generateWithImage(ctx context.Context, systemPrompt, userI
 func looksComplete(html string) bool {
 	return strings.Contains(strings.ToLower(html), "</html>")
 }
+
+// designSpecBlock formats the design read from a reference image.
+func designSpecBlock(spec string) string {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return ""
+	}
+	return "\n\n" + DesignSpecInstructions + "\n" + spec + "\n"
+}
+
+// generateDesignSpec reads a reference image once and writes its design down as
+// text, so the document itself can be generated without the image attached.
+func (a *ResumeAgent) generateDesignSpec(ctx context.Context, imageDataURI string) (string, error) {
+	spec, err := a.generateWithImage(ctx, DesignSpecSystemPrompt, DesignSpecUserPrompt, imageDataURI)
+	if err != nil {
+		return "", err
+	}
+	spec = strings.TrimSpace(spec)
+	// A runaway description would eat the document prompt it is inserted into.
+	if len(spec) > maxDesignSpecChars {
+		spec = spec[:maxDesignSpecChars]
+	}
+	return spec, nil
+}
+
+// maxDesignSpecChars caps the written-down design; it is asked for under 250
+// words, so this only ever bites if the model ignores that.
+const maxDesignSpecChars = 6000
 
 // designRefPromptBlock formats the design-reference instructions for the user
 // message. Empty when no reference image is attached, so the text-only path is

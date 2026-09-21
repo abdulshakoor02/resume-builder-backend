@@ -227,19 +227,26 @@ func (a *ResumeAgent) GenerateResume(
 			// through to the proven text-only path below, so a reference image can
 			// never be the reason a generation fails.
 			if designRefDataURI != "" {
-				log.Printf("agent: design reference attached (%d chars), trying multimodal generation", len(designRefDataURI))
-				mStart := time.Now()
-				raw, mErr := a.generateWithImage(ctx, FastSystemPrompt, fastInput+designRefPromptBlock(designRefDataURI), designRefDataURI)
-				if mErr != nil {
-					log.Printf("agent: multimodal generation failed after %s, falling back to text-only: %v", time.Since(mStart), mErr)
-				} else if htmlWithRef := extractHTML(raw); htmlWithRef != "" {
-					log.Printf("agent: multimodal generation succeeded in %s html_len=%d", time.Since(mStart), len(htmlWithRef))
-					if photoDataURI != "" {
-						htmlWithRef = inlinePhotoReference(htmlWithRef, resumeID, photoDataURI)
-					}
-					return a.storeFastResult(userID, resumeID, htmlWithRef, conversationHistory, time.Since(mStart), "multimodal_ref_path"), nil
+				// Two steps, deliberately. Asking the model to write a long
+				// document *while* it looks at the reference image does not work
+				// on this provider: the image plus a full resume exceeds the
+				// output budget and the reply is cut off mid-document (measured:
+				// finish_reason "length" at 16107 characters with max_tokens at
+				// 12000) — which is what produced the broken, 4k-character
+				// resumes. So the image is read once for a short written-down
+				// design, and the document is then generated text-only with the
+				// whole output budget.
+				log.Printf("agent: design reference attached (%d chars), reading its design", len(designRefDataURI))
+				dStart := time.Now()
+				spec, sErr := a.generateDesignSpec(ctx, designRefDataURI)
+				if sErr != nil {
+					// A reference image must never be the reason a generation
+					// fails: continue with the prose design instructions.
+					log.Printf("agent: design read failed after %s, continuing text-only: %v", time.Since(dStart), sErr)
+					fastInput += designRefPromptBlock(designRefDataURI)
 				} else {
-					log.Printf("agent: multimodal reply contained no HTML (len=%d), falling back to text-only", len(raw))
+					log.Printf("agent: design read in %s (%d chars): %.160s", time.Since(dStart), len(spec), spec)
+					fastInput += designSpecBlock(spec)
 				}
 			}
 

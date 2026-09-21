@@ -13,6 +13,12 @@ func New(cfg *config.Config) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "Resume Builder API",
 		ErrorHandler: errorHandler,
+		// Fiber defaults to a 4MB body limit, which silently truncated the real
+		// limits: the UI advertises PDFs up to 10MB and a design reference may be
+		// up to 5MB, and anything over 4MB died as a reset connection instead of a
+		// readable error. 16MB covers a 10MB document plus a 5MB image with room
+		// for multipart overhead.
+		BodyLimit: 16 * 1024 * 1024,
 	})
 
 	app.Use(logger.New())

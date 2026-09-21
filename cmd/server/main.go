@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/resume-builder/backend/internal/agent"
@@ -75,6 +76,31 @@ func main() {
 
 	app := server.New(cfg)
 	server.RegisterRoutes(app, authH, resumeH, uploadH, exportH, usageH, cfg.JWTSecret)
+
+	// Generation runs in-process, so a restart mid-build orphans the resume in
+	// "generating" and the dashboard polls it forever. Reconcile at boot (with a
+	// grace window for a generation the old container may still be finishing) and
+	// keep sweeping for workers that died on their own.
+	go func() {
+		sweep := func(cutoff time.Time) {
+			if n, sweepErr := resumeStore.FailStaleGenerating(ctx, cutoff); sweepErr != nil {
+				log.Printf("stale-generating sweep failed: %v", sweepErr)
+			} else if n > 0 {
+				log.Printf("marked %d interrupted generation(s) as failed", n)
+			}
+		}
+		sweep(time.Now().Add(-3 * time.Minute))
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep(time.Now().Add(-10 * time.Minute))
+			}
+		}
+	}()
 
 	go func() {
 		if err := app.Listen(":" + cfg.Port); err != nil {

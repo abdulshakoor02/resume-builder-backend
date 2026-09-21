@@ -108,6 +108,31 @@ func (s *ResumeStore) PushRevision(ctx context.Context, id primitive.ObjectID, r
 	return err
 }
 
+// FailStaleGenerating marks resumes still in "generating" that haven't been
+// touched since cutoff as failed.
+//
+// Generation runs in-process, so a deploy or crash mid-build orphans the
+// document in "generating" forever: the dashboard polls it and spins with no way
+// out (the frontend only stops on completed/failed). Startup reconciles whatever
+// the previous process left behind; the periodic sweep catches a worker that
+// died on its own.
+func (s *ResumeStore) FailStaleGenerating(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.coll.UpdateMany(ctx,
+		bson.M{
+			"status": model.StatusGenerating,
+			"$or": []bson.M{
+				{"updated_at": bson.M{"$lt": cutoff}},
+				{"updated_at": bson.M{"$exists": false}, "created_at": bson.M{"$lt": cutoff}},
+			},
+		},
+		bson.M{"$set": bson.M{"status": model.StatusFailed, "updated_at": time.Now()}},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
 func (s *ResumeStore) SetStatus(ctx context.Context, id primitive.ObjectID, status model.ResumeStatus) error {
 	return s.Update(ctx, id, bson.M{"status": status})
 }

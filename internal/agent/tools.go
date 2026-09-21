@@ -19,6 +19,11 @@ type ToolContext struct {
 	UserID      string
 	ResumeID    string
 	RevisionNum int
+	// PhotoDataURI is the profile photo as a data URI. The model is *told* the
+	// photo URL, but that endpoint is owner-authenticated and an <img> inside a
+	// saved/exported resume can't send a bearer token — so the bytes are inlined
+	// into the stored document instead.
+	PhotoDataURI string
 }
 
 func (tc *ToolContext) BuildTools() []tool.Tool {
@@ -182,6 +187,13 @@ func (tc *ToolContext) generateHTMLTool() tool.Tool {
 
 			tc.RevisionNum++
 			key := fmt.Sprintf("html/%s/%s/v%d.html", tc.UserID, tc.ResumeID, tc.RevisionNum)
+
+			// The model embeds the photo as a URL, but that endpoint now requires
+			// the owner's token — which an <img> in a saved/exported resume cannot
+			// send. Inline the bytes so the document stands alone.
+			if tc.PhotoDataURI != "" {
+				html = inlinePhotoReference(html, tc.ResumeID, tc.PhotoDataURI)
+			}
 
 			log.Printf("tool generate_html: storing HTML, length=%d key=%s", len(html), key)
 			store.PutHTML(key, []byte(html))

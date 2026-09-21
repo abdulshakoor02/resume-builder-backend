@@ -37,3 +37,16 @@ type Revision struct {
 	AgentContext interface{} `bson:"agent_context,omitempty" json:"agent_context,omitempty"`
 	CreatedAt    time.Time   `bson:"created_at" json:"created_at"`
 }
+
+// DeleteResumeResponse reports exactly what a delete removed. Object-storage
+// deletions are best-effort (a missing object must not fail the whole delete),
+// so the counts and errors are returned instead of an all-or-nothing status.
+type DeleteResumeResponse struct {
+	Deleted        bool     `json:"deleted"`
+	ResumeID       string   `json:"resume_id"`
+	UploadsDeleted int64    `json:"uploads_deleted"`
+	FilesDeleted   int      `json:"files_deleted"`
+	FilesFailed    int      `json:"files_failed"`
+	CachePurged    int      `json:"cache_entries_purged"`
+	Errors         []string `json:"errors,omitempty"`
+}

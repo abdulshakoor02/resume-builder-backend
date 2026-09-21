@@ -184,10 +184,11 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			log.Printf("file received: %s, size=%d bytes", fileHeader.Filename, len(fileBytes))
 
 			upload := model.Upload{
-				ID:        primitive.NewObjectID(),
-				UserID:    userID,
-				FileName:  fileHeader.Filename,
-				MimeType:  fileHeader.Header.Get("Content-Type"),
+				ID:       primitive.NewObjectID(),
+				UserID:   userID,
+				ResumeID: resume.ID, // resume.ID exists before the doc is inserted, so link up front
+				FileName: fileHeader.Filename,
+				MimeType: fileHeader.Header.Get("Content-Type"),
 				CreatedAt: time.Now(),
 			}
 
@@ -328,12 +329,16 @@ func (h *ResumeHandler) List(c fiber.Ctx) error {
 }
 
 func (h *ResumeHandler) Get(c fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return err
+	}
 	id, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid resume id")
 	}
 
-	resume, err := h.resumeStore.FindByID(context.Background(), id)
+	resume, err := h.resumeStore.FindByIDForUser(context.Background(), id, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "resume not found")
 	}
@@ -341,8 +346,112 @@ func (h *ResumeHandler) Get(c fiber.Ctx) error {
 	return c.JSON(resume)
 }
 
+// userIDFromLocals returns the authenticated user id injected by
+// AuthRequiredMiddleware. Handlers behind that middleware use it both to scope
+// lookups and to answer 401 when the middleware was bypassed.
+func userIDFromLocals(c fiber.Ctx) (primitive.ObjectID, error) {
+	userIDStr, ok := c.Locals("user_id").(string)
+	if !ok || userIDStr == "" {
+		return primitive.NilObjectID, fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	}
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		return primitive.NilObjectID, fiber.NewError(fiber.StatusUnauthorized, "invalid user id")
+	}
+	return userID, nil
+}
+
+// Delete removes a resume and everything derived from it: the Mongo document,
+// its source-upload rows, the stored HTML/PDF objects, the profile photo and the
+// in-process caches. Object deletion is best-effort — the object store is
+// periodically out of sync, and a missing object must not leave a resume the
+// user can no longer delete — so partial failures are reported in the response
+// instead of failing the request.
+func (h *ResumeHandler) Delete(c fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return err
+	}
+	resumeID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid resume id")
+	}
+
+	ctx := context.Background()
+	resume, err := h.resumeStore.FindByIDForUser(ctx, resumeID, userID)
+	if err != nil {
+		// Missing and not-yours get the same answer, so probing IDs reveals nothing.
+		return fiber.NewError(fiber.StatusNotFound, "resume not found")
+	}
+	resumeHex := resume.ID.Hex()
+
+	// Every stored object this resume owns, de-duplicated.
+	paths := map[string]struct{}{}
+	addPath := func(p string) {
+		if strings.TrimSpace(p) != "" {
+			paths[p] = struct{}{}
+		}
+	}
+	addPath(resume.CurrentPDFPath)
+	addPath(resume.PhotoPath)
+	for _, rev := range resume.Revisions {
+		addPath(rev.PDFPath)
+	}
+
+	uploads, uErr := h.uploadStore.FindByResumeID(ctx, resume.ID, userID)
+	if uErr != nil {
+		log.Printf("delete resume %s: upload lookup failed: %v", resumeHex, uErr)
+	}
+	for _, u := range uploads {
+		addPath(u.NextcloudPath)
+	}
+
+	resp := model.DeleteResumeResponse{Deleted: true, ResumeID: resumeHex}
+
+	// 1. Stored objects (path by path, so one failure doesn't stop the rest).
+	if h.ncStore != nil {
+		for p := range paths {
+			if err := h.ncStore.DeleteFile(p); err != nil {
+				resp.FilesFailed++
+				log.Printf("delete resume %s: object delete failed for %s: %v", resumeHex, p, err)
+				if len(resp.Errors) < 5 {
+					resp.Errors = append(resp.Errors, fmt.Sprintf("%s: %v", p, err))
+				}
+				continue
+			}
+			resp.FilesDeleted++
+		}
+	}
+
+	// 2. Database rows — resume last, so a mid-way failure stays retryable.
+	deletedUploads, err := h.uploadStore.DeleteByResumeID(ctx, resume.ID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete resume uploads")
+	}
+	resp.UploadsDeleted = deletedUploads
+
+	deleted, err := h.resumeStore.DeleteByID(ctx, resume.ID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete resume")
+	}
+	if deleted == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "resume not found")
+	}
+
+	// 3. In-process caches: revision HTML/PDF, photo, uploaded file bytes.
+	resp.CachePurged = store.PurgeResumeCache(resumeHex) + store.PurgeResumeFiles(resumeHex)
+
+	log.Printf("delete resume %s: objects=%d failed=%d uploads=%d cache_purged=%d",
+		resumeHex, resp.FilesDeleted, resp.FilesFailed, resp.UploadsDeleted, resp.CachePurged)
+	return c.JSON(resp)
+}
+
 func (h *ResumeHandler) Refine(c fiber.Ctx) error {
-	userIDStr, _ := c.Locals("user_id").(string)
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return err
+	}
+	userIDStr := userID.Hex()
 
 	resumeID, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
@@ -422,7 +531,7 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		}
 	}
 
-	resume, err := h.resumeStore.FindByID(context.Background(), resumeID)
+	resume, err := h.resumeStore.FindByIDForUser(context.Background(), resumeID, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "resume not found")
 	}

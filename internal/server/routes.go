@@ -32,15 +32,15 @@ func RegisterRoutes(
 	upload := api.Group("/upload")
 	upload.Post("/", uploadH.Upload)
 
-	// Public photo endpoint (no auth) — MUST be registered before
-	// the auth-protected resumes group, otherwise Fiber matches
-	// api/resumes/:id first and applies the auth middleware.
-	api.Get("/resumes/:id/photo", exportH.Photo)
-
+	// Every /resumes route is authenticated AND owner-scoped. The photo and PDF
+	// used to be public (anyone holding an ID could fetch them) and the ID-based
+	// lookups had no ownership check at all.
 	resumes := api.Group("/resumes", AuthRequiredMiddleware(jwtSecret))
 	resumes.Post("/", resumeH.Create)
 	resumes.Get("/", resumeH.List)
 	resumes.Get("/:id", resumeH.Get)
+	resumes.Delete("/:id", resumeH.Delete)
 	resumes.Post("/:id/refine", resumeH.Refine)
 	resumes.Get("/:id/pdf", exportH.Download)
+	resumes.Get("/:id/photo", exportH.Photo)
 }

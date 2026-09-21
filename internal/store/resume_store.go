@@ -50,6 +50,28 @@ func (s *ResumeStore) FindByResumeIDString(resumeIDStr string) (*model.Resume, e
 	return s.FindByID(context.Background(), id)
 }
 
+// FindByIDForUser scopes a lookup to the owner. Any handler that takes a resume
+// ID from the URL must go through this (or compare UserID itself): with a bare
+// FindByID one authenticated user can read, refine or delete another user's
+// resume by guessing/leaking its ObjectID.
+func (s *ResumeStore) FindByIDForUser(ctx context.Context, id, userID primitive.ObjectID) (*model.Resume, error) {
+	var resume model.Resume
+	if err := s.coll.FindOne(ctx, bson.M{"_id": id, "user_id": userID}).Decode(&resume); err != nil {
+		return nil, err
+	}
+	return &resume, nil
+}
+
+// DeleteByID removes a resume, scoped to its owner. Returns rows deleted, so a
+// caller can tell "not yours / not found" from "deleted".
+func (s *ResumeStore) DeleteByID(ctx context.Context, id, userID primitive.ObjectID) (int64, error) {
+	res, err := s.coll.DeleteOne(ctx, bson.M{"_id": id, "user_id": userID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
 func (s *ResumeStore) FindByUserID(ctx context.Context, userID primitive.ObjectID) ([]*model.Resume, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
 	cursor, err := s.coll.Find(ctx, bson.M{"user_id": userID}, opts)

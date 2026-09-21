@@ -62,3 +62,29 @@ func GetPhoto(key string) ([]byte, bool) {
 	data, ok := photoCache.cache[key]
 	return data, ok
 }
+
+// PurgeResumeFiles drops a resume's cached photo and uploaded-file blobs
+// (key or resume-ID scoped, matching the substring lookups the readers use).
+func PurgeResumeFiles(resumeID string) int {
+	n := 0
+
+	photoCache.mu.Lock()
+	for key := range photoCache.cache {
+		if strings.Contains(key, resumeID) {
+			delete(photoCache.cache, key)
+			n++
+		}
+	}
+	photoCache.mu.Unlock()
+
+	uploadedFiles.mu.Lock()
+	for key := range uploadedFiles.cache {
+		if strings.Contains(key, resumeID) {
+			delete(uploadedFiles.cache, key)
+			n++
+		}
+	}
+	uploadedFiles.mu.Unlock()
+
+	return n
+}

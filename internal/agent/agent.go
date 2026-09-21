@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,6 +74,32 @@ func extractExistingHTML(history []map[string]string) string {
 		}
 	}
 	return ""
+}
+
+// photoURLPattern matches the photo URL buildPhotoBlock hands the model
+// (`<apiBase>/api/resumes/<24-hex id>/photo`), whatever apiBase this deployment
+// uses.
+var photoURLPattern = regexp.MustCompile(`https?://[^\s"'<>()]+/api/resumes/[0-9a-f]{24}/photo`)
+
+// inlinePhotoReference replaces the photo URL inside generated HTML with the
+// photo bytes as a data URI. The photo endpoint is owner-authenticated, and an
+// <img> inside a saved or exported resume cannot carry a bearer token, so the
+// document has to hold the image itself.
+func inlinePhotoReference(html, resumeID, photoDataURI string) string {
+	if html == "" || photoDataURI == "" {
+		return html
+	}
+	if out := photoURLPattern.ReplaceAllString(html, photoDataURI); out != html {
+		return out
+	}
+	// Model used a different form (relative path, HTML-escaped) — fall back to a
+	// literal replace of the canonical URL for this resume.
+	apiBase := os.Getenv("API_BASE_URL")
+	if apiBase == "" {
+		apiBase = "http://localhost:1100"
+	}
+	canonical := fmt.Sprintf("%s/api/resumes/%s/photo", strings.TrimRight(apiBase, "/"), resumeID)
+	return strings.ReplaceAll(html, canonical, photoDataURI)
 }
 
 func buildPhotoBlock(resumeID, photoDataURI string) (string, string) {
@@ -177,6 +204,11 @@ func (a *ResumeAgent) GenerateResume(
 			fastElapsed := time.Since(start)
 			if err == nil && len(html) > 1000 {
 				log.Printf("agent: fast path succeeded in %s html_len=%d", fastElapsed, len(html))
+				// Inline the photo so the stored document doesn't depend on an
+				// authenticated URL (see inlinePhotoReference).
+				if photoDataURI != "" {
+					html = inlinePhotoReference(html, resumeID, photoDataURI)
+				}
 				// Determine revision-ish key: create = v1, refine = vN where N = prior count +1
 				revHint := 1
 				if len(conversationHistory) > 0 {
@@ -214,11 +246,12 @@ func (a *ResumeAgent) GenerateResume(
 	agt.SetSystemInstructions(SystemPrompt)
 
 	toolCtx := &ToolContext{
-		NCStore:     a.ncStore,
-		Anydoc:      a.anydoc,
-		UserID:      userID,
-		ResumeID:    resumeID,
-		RevisionNum: 0,
+		NCStore:      a.ncStore,
+		Anydoc:       a.anydoc,
+		UserID:       userID,
+		ResumeID:     resumeID,
+		RevisionNum:  0,
+		PhotoDataURI: photoDataURI,
 	}
 
 	tools := toolCtx.BuildTools()

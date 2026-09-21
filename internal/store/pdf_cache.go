@@ -49,3 +49,33 @@ func GetPDF(key string) ([]byte, bool) {
 func GetPDFByResumeID(resumeID string) ([]byte, bool) {
 	return pdfCache.GetByResumeID(resumeID)
 }
+
+// Del drops a single cache entry.
+func (c *PDFCache) Del(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cache, key)
+}
+
+// DeleteByResumeID drops every entry whose key mentions the resume ID — the same
+// substring rule GetByResumeID/GetAnyCacheByResumeID match on, so a deleted
+// resume can't be served from memory after the DB row is gone.
+func (c *PDFCache) DeleteByResumeID(resumeID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for key := range c.cache {
+		if strings.Contains(key, resumeID) {
+			delete(c.cache, key)
+			n++
+		}
+	}
+	return n
+}
+
+// PurgeResumeCache removes both the resume-keyed entry and any revision-keyed
+// HTML/PDF entries for a resume, returning how many entries were dropped.
+func PurgeResumeCache(resumeID string) int {
+	pdfCache.Del(resumeID)
+	return pdfCache.DeleteByResumeID(resumeID)
+}

@@ -146,9 +146,15 @@ func (s *ResumeStore) CountCompletedResumes(ctx context.Context, userID primitiv
 }
 
 func (s *ResumeStore) CountTotalRevisions(ctx context.Context, userID primitive.ObjectID) (int, error) {
+	// $size errors on a document where `revisions` is absent — it is omitempty and
+	// is only pushed once a generation succeeds — which made /api/usage answer
+	// 500 "failed to count revisions" (and the dashboard show a broken usage
+	// banner) for a window after every create. $ifNull treats a missing array as
+	// empty.
+	revisionCount := bson.M{"$size": bson.M{"$ifNull": []interface{}{"$revisions", []interface{}{}}}}
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"user_id": userID}}},
-		{{Key: "$project", Value: bson.M{"revision_count": bson.M{"$size": "$revisions"}}}},
+		{{Key: "$project", Value: bson.M{"revision_count": revisionCount}}},
 		{{Key: "$group", Value: bson.M{"_id": nil, "total": bson.M{"$sum": "$revision_count"}}}},
 	}
 	cursor, err := s.coll.Aggregate(ctx, pipeline)

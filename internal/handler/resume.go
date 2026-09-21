@@ -199,7 +199,12 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 					log.Printf("design_ref: received %s, size=%d bytes, type=%s", rh.Filename, len(rb), contentType)
 					designRefMime = contentType
 					designRefBytes = rb
-					designRefDataURI = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(rb)
+					// The model gets a downscaled copy (see ShrinkImageForModel):
+					// a full-page screenshot costs seconds of upload + prefill
+					// and loses nothing that matters here. Storage keeps the
+					// original bytes.
+					modelBytes, modelMime := agent.ShrinkImageForModel(rb, contentType)
+					designRefDataURI = "data:" + modelMime + ";base64," + base64.StdEncoding.EncodeToString(modelBytes)
 				}
 			}
 		}
@@ -568,6 +573,26 @@ func photoDataURIFor(data []byte, source string) string {
 	return "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
+// designRequested reports whether a refinement is asking about *appearance*
+// (layout, colours, typography, structure) rather than content. Only those need
+// the reference image again — everything else edits a document whose design is
+// already applied.
+func designRequested(prompt string) bool {
+	p := strings.ToLower(prompt)
+	for _, kw := range []string{
+		"design", "redesign", "layout", "style", "styling", "colour", "color",
+		"font", "typograph", "theme", "template", "look", "format", "palette",
+		"sidebar", "column", "spacing", "margin", "padding", "header", "banner",
+		"modern", "minimal", "elegant", "bold", "rearrange", "restructure",
+		"compact", "clean up the look", "make it look",
+	} {
+		if strings.Contains(p, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 	userID, err := userIDFromLocals(c)
 	if err != nil {
@@ -661,10 +686,23 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 	// Reuse the design reference the resume was created with, so a refinement
 	// keeps the look the user asked for instead of drifting to a new design.
 	var designRefDataURI string
+	preserveDesign := false
 	if h.designRefStore != nil {
 		if ref, refErr := h.designRefStore.Get(context.Background(), resumeID, userID); refErr == nil && ref != nil && len(ref.Data) > 0 {
-			designRefDataURI = "data:" + ref.MimeType + ";base64," + base64.StdEncoding.EncodeToString(ref.Data)
-			log.Printf("refine: reusing stored design reference (%d bytes)", len(ref.Data))
+			// Only pay for the image when the user is asking about appearance.
+			// An ordinary edit ("tighten the summary") already has the design in
+			// the document: re-sending a full-page screenshot costs a measured
+			// 38.5s against 6.5s and changes nothing, so the design is preserved
+			// by instruction instead (see PreserveDesignInstruction).
+			if designRequested(req.Prompt) {
+				modelBytes, modelMime := agent.ShrinkImageForModel(ref.Data, ref.MimeType)
+				designRefDataURI = "data:" + modelMime + ";base64," + base64.StdEncoding.EncodeToString(modelBytes)
+				log.Printf("refine: attaching design reference (%d bytes, downscaled from %d) for a design-related request",
+					len(modelBytes), len(ref.Data))
+			} else {
+				preserveDesign = true
+				log.Printf("refine: design reference not needed for this edit, preserving the existing design")
+			}
 		} else if refErr != nil && refErr != mongo.ErrNoDocuments {
 			log.Printf("refine: design reference lookup failed (continuing without it): %v", refErr)
 		}
@@ -749,15 +787,22 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 			}
 		}
 
+		// The stored revision keeps the user's own words; the preserve-design
+		// instruction is only an input to this generation.
+		agentPrompt := req.Prompt
+		if preserveDesign {
+			agentPrompt = agent.PreserveDesignInstruction + "\n\n" + req.Prompt
+		}
+
 		result, err := h.resumeAgent.GenerateResume(
 			ctx,
 			userIDStr,
 			resumeIDStr,
 			"",
-			req.Prompt,
+			agentPrompt,
 			history,
 			photoDataURI, // photoDataURI — empty if no photo uploaded
-			designRefDataURI, // design reference reused from creation (empty if none)
+			designRefDataURI, // design reference, attached only when the edit is about appearance
 		)
 		if err != nil {
 			h.resumeStore.SetStatus(ctx, resumeID, model.StatusFailed)

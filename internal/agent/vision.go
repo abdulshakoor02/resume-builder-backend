@@ -56,11 +56,17 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-// visionMaxTokens mirrors the scanned-PDF extractor: resume-shaped HTML is large,
-// so the default output window has to be generous or the document gets truncated.
-func visionMaxTokens() int {
-	maxTokens := 16000
-	if v := os.Getenv("LLM_VISION_MAX_TOKENS"); v != "" {
+// generationMaxTokens bounds the output of a multimodal generation.
+//
+// It must NOT inherit LLM_VISION_MAX_TOKENS: that variable sizes the scanned-PDF
+// *extractor*, this deployment sets it to 100000, and an effectively unlimited
+// budget on a generation is what slowed design-referenced builds to a measured
+// 38.5s (against 6.5s for the same document without a reference) — the model
+// writes 18k+ characters where ~6k does. Generated documents run 6-20k
+// characters, so 8000 tokens is generous; LLM_GEN_MAX_TOKENS overrides it.
+func generationMaxTokens() int {
+	maxTokens := 8000
+	if v := os.Getenv("LLM_GEN_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			maxTokens = n
 		}
@@ -89,7 +95,7 @@ func (a *ResumeAgent) generateWithImage(ctx context.Context, systemPrompt, userI
 
 	body := chatRequest{
 		Model:     model,
-		MaxTokens: visionMaxTokens(),
+		MaxTokens: generationMaxTokens(),
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: []chatContentPart{

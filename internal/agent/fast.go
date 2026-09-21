@@ -110,3 +110,38 @@ func (a *ResumeAgent) storeHTMLResult(userID, resumeID, html string) *AgentResul
 		FinalOutput: html,
 	}
 }
+
+// storeFastResult caches a completed single-turn generation and builds its
+// AgentResult. Both the text-only fast path and the multimodal (design
+// reference) path end here, so they store identically; `source` is recorded in
+// structured_data, which makes it possible to tell after the fact which path
+// produced a document.
+func (a *ResumeAgent) storeFastResult(userID, resumeID, html string, conversationHistory []map[string]string, elapsed time.Duration, source string) *AgentResult {
+	// revision-ish key: create = v1, refine = vN where N = prior count + 1
+	revHint := 1
+	if len(conversationHistory) > 0 {
+		revHint = countHistoryPrompts(conversationHistory) + 1
+		if revHint < 2 {
+			revHint = 2
+		}
+	}
+	key := fmt.Sprintf("html/%s/%s/v%d.html", userID, resumeID, revHint)
+	store.PutHTML(key, []byte(html))
+	store.PutHTML(resumeID, []byte(html))
+	if a.ncStore != nil {
+		go func(k string, data []byte) {
+			if err := a.ncStore.UploadFile(k, data); err != nil {
+				log.Printf("fast store: nc upload failed %s: %v", k, err)
+			}
+		}(key, []byte(html))
+	}
+	return &AgentResult{
+		HTMLPath: key,
+		ResumeData: map[string]interface{}{
+			"source":     source,
+			"html_size":  len(html),
+			"elapsed_ms": elapsed.Milliseconds(),
+		},
+		FinalOutput: html,
+	}
+}

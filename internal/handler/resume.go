@@ -19,22 +19,30 @@ import (
 	"github.com/resume-builder/backend/internal/store"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type ResumeHandler struct {
 	resumeStore       *store.ResumeStore
 	uploadStore       *store.UploadStore
 	ncStore           *store.NextcloudStore
+	designRefStore    *store.DesignRefStore
 	resumeAgent       *agent.ResumeAgent
 	anydoc            *converter.Client
 	freeResumeLimit   int
 	freeRevisionLimit int
 }
 
+// maxDesignRefBytes caps a design reference image. Screenshots of full resume
+// pages are commonly a few hundred KB; 5MB leaves room without letting a request
+// push tens of megabytes into the model call.
+const maxDesignRefBytes = 5 * 1024 * 1024
+
 func NewResumeHandler(
 	resumeStore *store.ResumeStore,
 	uploadStore *store.UploadStore,
 	ncStore *store.NextcloudStore,
+	designRefStore *store.DesignRefStore,
 	resumeAgent *agent.ResumeAgent,
 	anydoc *converter.Client,
 	freeResumeLimit int,
@@ -44,6 +52,7 @@ func NewResumeHandler(
 		resumeStore:       resumeStore,
 		uploadStore:       uploadStore,
 		ncStore:           ncStore,
+		designRefStore:    designRefStore,
 		resumeAgent:       resumeAgent,
 		anydoc:            anydoc,
 		freeResumeLimit:   freeResumeLimit,
@@ -157,11 +166,48 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		}
 	}
 
+	// ---- Design reference image (optional) ----
+	// A picture of a resume design the user wants reproduced. It is sent to the
+	// model as a multimodal content part and contributes *appearance only* — the
+	// instructions forbid copying any text out of it (see DesignRefInstructions).
+	var designRefDataURI string
+	var designRefMime string
+	var designRefBytes []byte
+	if form != nil && form.File != nil {
+		if refHeaders, ok := form.File["design_ref"]; ok && len(refHeaders) > 0 {
+			rh := refHeaders[0]
+			if rh.Size > maxDesignRefBytes {
+				return fiber.NewError(fiber.StatusBadRequest, "design reference image must be under 5MB")
+			}
+			rf, err := rh.Open()
+			if err != nil {
+				log.Printf("design_ref: failed to open: %v", err)
+			} else {
+				rb, rErr := io.ReadAll(rf)
+				rf.Close()
+				if rErr != nil {
+					log.Printf("design_ref: failed to read: %v", rErr)
+				} else {
+					contentType := http.DetectContentType(rb)
+					if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/webp" {
+						return fiber.NewError(fiber.StatusBadRequest,
+							fmt.Sprintf("design reference must be a JPEG, PNG or WebP image (got %s)", contentType))
+					}
+					log.Printf("design_ref: received %s, size=%d bytes, type=%s", rh.Filename, len(rb), contentType)
+					designRefMime = contentType
+					designRefBytes = rb
+					designRefDataURI = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(rb)
+				}
+			}
+		}
+	}
+
 	resume := &model.Resume{
-		ID:     primitive.NewObjectID(),
-		UserID: userID,
-		Title:  title,
-		Status: model.StatusGenerating,
+		ID:            primitive.NewObjectID(),
+		UserID:        userID,
+		Title:         title,
+		Status:        model.StatusGenerating,
+		DesignRefMime: designRefMime,
 	}
 
 	var extractedText string
@@ -249,6 +295,16 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 		store.PutPhoto(resume.ID.Hex(), photoBytes)
 	}
 
+	// Persist the design reference so later refinements keep the same look. The
+	// bytes go in their own collection rather than on the resume document: the
+	// list endpoint returns whole resume documents and a base64 blob on each one
+	// would bloat every dashboard load.
+	if designRefBytes != nil && h.designRefStore != nil {
+		if refErr := h.designRefStore.Put(context.Background(), resume.ID, userID, designRefMime, designRefBytes); refErr != nil {
+			log.Printf("design_ref: persist failed, generation continues but refinements won't reuse it: %v", refErr)
+		}
+	}
+
 	log.Printf("resume created: id=%s title=%s status=generating prompt_len=%d extracted_text_len=%d",
 		resume.ID.Hex(), title, len(prompt), len(extractedText))
 
@@ -274,6 +330,7 @@ func (h *ResumeHandler) Create(c fiber.Ctx) error {
 			prompt,
 			nil,          // conversationHistory
 			photoDataURI, // profile photo (base64 data URI or empty)
+			designRefDataURI, // design reference image (base64 data URI or empty)
 		)
 		if err != nil {
 			log.Printf("agent failed for resume %s: %v", resumeID, err)
@@ -430,6 +487,16 @@ func (h *ResumeHandler) Delete(c fiber.Ctx) error {
 	}
 	resp.UploadsDeleted = deletedUploads
 
+	// Design reference bytes live in their own collection; drop them with the
+	// resume so nothing of a deleted resume survives anywhere.
+	if h.designRefStore != nil {
+		if refsDeleted, refErr := h.designRefStore.DeleteByResumeID(ctx, resume.ID, userID); refErr != nil {
+			log.Printf("delete resume %s: design reference delete failed: %v", resumeHex, refErr)
+		} else {
+			resp.DesignRefsDeleted = refsDeleted
+		}
+	}
+
 	deleted, err := h.resumeStore.DeleteByID(ctx, resume.ID, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete resume")
@@ -536,6 +603,18 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "resume not found")
 	}
 
+	// Reuse the design reference the resume was created with, so a refinement
+	// keeps the look the user asked for instead of drifting to a new design.
+	var designRefDataURI string
+	if h.designRefStore != nil {
+		if ref, refErr := h.designRefStore.Get(context.Background(), resumeID, userID); refErr == nil && ref != nil && len(ref.Data) > 0 {
+			designRefDataURI = "data:" + ref.MimeType + ";base64," + base64.StdEncoding.EncodeToString(ref.Data)
+			log.Printf("refine: reusing stored design reference (%d bytes)", len(ref.Data))
+		} else if refErr != nil && refErr != mongo.ErrNoDocuments {
+			log.Printf("refine: design reference lookup failed (continuing without it): %v", refErr)
+		}
+	}
+
 	// Check free tier revision limit
 	revisionCount, err := h.resumeStore.CountTotalRevisions(context.Background(), resume.UserID)
 	if err != nil {
@@ -614,6 +693,7 @@ func (h *ResumeHandler) Refine(c fiber.Ctx) error {
 			req.Prompt,
 			history,
 			photoDataURI, // photoDataURI — empty if no photo uploaded
+			designRefDataURI, // design reference reused from creation (empty if none)
 		)
 		if err != nil {
 			h.resumeStore.SetStatus(ctx, resumeID, model.StatusFailed)

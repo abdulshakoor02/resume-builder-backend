@@ -24,6 +24,9 @@ type Resume struct {
 	CurrentPDFURL  string             `bson:"current_pdf_url" json:"current_pdf_url"`
 	HTMLContent    string             `bson:"html_content,omitempty" json:"html_content,omitempty"`
 	PhotoPath      string             `bson:"photo_path,omitempty" json:"photo_path,omitempty"`
+	// DesignRefMime is set when the user attached a design reference image
+	// (the bytes live in the design_refs collection, keyed by resume ID).
+	DesignRefMime  string             `bson:"design_ref_mime,omitempty" json:"design_ref_mime,omitempty"`
 	StructuredData interface{}        `bson:"structured_data,omitempty" json:"structured_data,omitempty"`
 	Revisions      []Revision         `bson:"revisions,omitempty" json:"revisions,omitempty"`
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
@@ -42,11 +45,12 @@ type Revision struct {
 // deletions are best-effort (a missing object must not fail the whole delete),
 // so the counts and errors are returned instead of an all-or-nothing status.
 type DeleteResumeResponse struct {
-	Deleted        bool     `json:"deleted"`
-	ResumeID       string   `json:"resume_id"`
-	UploadsDeleted int64    `json:"uploads_deleted"`
-	FilesDeleted   int      `json:"files_deleted"`
-	FilesFailed    int      `json:"files_failed"`
-	CachePurged    int      `json:"cache_entries_purged"`
-	Errors         []string `json:"errors,omitempty"`
+	Deleted           bool     `json:"deleted"`
+	ResumeID          string   `json:"resume_id"`
+	UploadsDeleted    int64    `json:"uploads_deleted"`
+	FilesDeleted      int      `json:"files_deleted"`
+	FilesFailed       int      `json:"files_failed"`
+	CachePurged       int      `json:"cache_entries_purged"`
+	DesignRefsDeleted int64    `json:"design_refs_deleted,omitempty"`
+	Errors            []string `json:"errors,omitempty"`
 }

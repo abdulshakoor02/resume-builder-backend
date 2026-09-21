@@ -64,3 +64,23 @@ HTML RULES:
 - Preserve EVERY detail: every job, company, date, bullet verbatim, all skills/certs/education/metrics. Never summarize or fabricate.
 
 OUTPUT: Return ONLY the HTML document. No explanation. No markdown fences.`
+
+// DesignRefInstructions is appended to the generation prompt when the user
+// attached a design reference image. The image itself travels as a multimodal
+// content part (see agent.generateWithImage), so these instructions only need to
+// say what to take from it — and what never to take from it.
+const DesignRefInstructions = `DESIGN REFERENCE (image attached): reproduce the look of the attached image as closely as you can.
+
+Match, in order of visual importance:
+1. Layout skeleton: number of columns, sidebar side and relative width, section order and grouping, header band height.
+2. Header treatment: where the name/title/photo/contact sit, alignment, background band or rule.
+3. Colour palette: sample the ACTUAL hex values from the image (backgrounds, bands, accents, heading colour) and reuse them.
+4. Typography: typeface character (serif/sans/mono), weight hierarchy, size relationships, letter-spacing, use of small-caps or rules.
+5. Rhythm and detail: spacing between sections, divider/dot/border treatments, icon or accent shapes, bullet styling, use of colour blocks.
+
+Hard rules:
+- NEVER copy text, names, dates or numbers from the reference image. Every word must come from the candidate's own resume text/instructions.
+- The output stays a single self-contained HTML document with real, selectable text - never render text inside an image.
+- Keep the print rules from your instructions (@media print, A4, no broken entries).
+- If the reference uses a font you cannot load, use the closest Google Font.
+- Content fidelity outranks design fidelity: if reproducing a detail would drop or hide any real detail of the candidate's resume, keep the content and approximate the design.`

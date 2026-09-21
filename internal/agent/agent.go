@@ -127,13 +127,14 @@ func (a *ResumeAgent) GenerateResume(
 	prompt string,
 	conversationHistory []map[string]string,
 	photoDataURI string,
+	designRefDataURI string,
 ) (*AgentResult, error) {
 	if a.provider == nil {
 		return nil, fmt.Errorf("LLM provider not configured - set LLM_API_KEY in your .env")
 	}
 
-	log.Printf("agent: building agent with prompt_len=%d extracted_text_len=%d history_count=%d",
-		len(prompt), len(extractedText), len(conversationHistory))
+	log.Printf("agent: building agent with prompt_len=%d extracted_text_len=%d history_count=%d design_ref=%v",
+		len(prompt), len(extractedText), len(conversationHistory), designRefDataURI != "")
 
 	photoBlock, photoURL := buildPhotoBlock(resumeID, photoDataURI)
 
@@ -198,6 +199,28 @@ func (a *ResumeAgent) GenerateResume(
 			useFast = true
 		}
 		if useFast && fastInput != "" {
+			// With a design reference the model must *see* the image while it writes
+			// the document. The SDK path cannot carry images, so this one call goes
+			// straight to the chat-completions API; anything that goes wrong falls
+			// through to the proven text-only path below, so a reference image can
+			// never be the reason a generation fails.
+			if designRefDataURI != "" {
+				log.Printf("agent: design reference attached (%d chars), trying multimodal generation", len(designRefDataURI))
+				mStart := time.Now()
+				raw, mErr := a.generateWithImage(ctx, FastSystemPrompt, fastInput+designRefPromptBlock(designRefDataURI), designRefDataURI)
+				if mErr != nil {
+					log.Printf("agent: multimodal generation failed after %s, falling back to text-only: %v", time.Since(mStart), mErr)
+				} else if htmlWithRef := extractHTML(raw); htmlWithRef != "" {
+					log.Printf("agent: multimodal generation succeeded in %s html_len=%d", time.Since(mStart), len(htmlWithRef))
+					if photoDataURI != "" {
+						htmlWithRef = inlinePhotoReference(htmlWithRef, resumeID, photoDataURI)
+					}
+					return a.storeFastResult(userID, resumeID, htmlWithRef, conversationHistory, time.Since(mStart), "multimodal_ref_path"), nil
+				} else {
+					log.Printf("agent: multimodal reply contained no HTML (len=%d), falling back to text-only", len(raw))
+				}
+			}
+
 			log.Printf("agent: attempting fast path input_len=%d", len(fastInput))
 			start := time.Now()
 			html, err := a.fastGenerate(ctx, FastSystemPrompt, fastInput)
@@ -209,33 +232,7 @@ func (a *ResumeAgent) GenerateResume(
 				if photoDataURI != "" {
 					html = inlinePhotoReference(html, resumeID, photoDataURI)
 				}
-				// Determine revision-ish key: create = v1, refine = vN where N = prior count +1
-				revHint := 1
-				if len(conversationHistory) > 0 {
-					revHint = countHistoryPrompts(conversationHistory) + 1
-					if revHint < 2 {
-						revHint = 2
-					}
-				}
-				// Store with correct revision number
-				key := fmt.Sprintf("html/%s/%s/v%d.html", userID, resumeID, revHint)
-				store.PutHTML(key, []byte(html))
-				store.PutHTML(resumeID, []byte(html))
-				if a.ncStore != nil {
-					go func(k string, data []byte) {
-						if err := a.ncStore.UploadFile(k, data); err != nil {
-							log.Printf("fast store: nc upload failed %s: %v", k, err)
-						}
-					}(key, []byte(html))
-				}
-				// Try to extract resume data from HTML for structured_data field (best-effort)
-				var resumeData map[string]interface{}
-				resumeData = map[string]interface{}{"source": "fast_path", "html_size": len(html), "elapsed_ms": fastElapsed.Milliseconds()}
-				return &AgentResult{
-					HTMLPath:    key,
-					ResumeData:  resumeData,
-					FinalOutput: html,
-				}, nil
+				return a.storeFastResult(userID, resumeID, html, conversationHistory, fastElapsed, "fast_path"), nil
 			}
 			log.Printf("agent: fast path failed after %s: %v - falling back to agent loop", fastElapsed, err)
 		}

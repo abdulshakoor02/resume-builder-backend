@@ -43,6 +43,7 @@ func main() {
 	userStore := store.NewUserStore(mongoStore.DB)
 	resumeStore := store.NewResumeStore(mongoStore.DB)
 	uploadStore := store.NewUploadStore(mongoStore.DB)
+	designRefStore := store.NewDesignRefStore(mongoStore.DB)
 
 	providerFactory, err := llm.NewProviderFactory(cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMBaseURL)
 	if err != nil {
@@ -60,6 +61,7 @@ func main() {
 		resumeStore,
 		uploadStore,
 		ncStore,
+		designRefStore,
 		resumeAgent,
 		anydocClient,
 		cfg.FreeResumeLimit,
